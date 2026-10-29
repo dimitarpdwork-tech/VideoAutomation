@@ -34,3 +34,14 @@ tr.clickable{cursor:pointer}tr.clickable:hover{background:#fafaf6}
 .modal-body h3{font:700 16px Manrope,Arial,sans-serif;margin:12px 0 4px}.modal-body p{margin:0;font-size:12px;color:#5f6657}
 .modal .close{position:absolute;top:6px;right:10px;border:none;background:none;font-size:26px;cursor:pointer;color:#3d4636}
 @media(max-width:760px){.review-card{grid-template-columns:1fr}.next-step h1{font-size:20px}}
+.voice-samples p{font-size:11px;color:#5f6657;margin:0;line-height:1.6}
+.sample-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.sample-actions small{font-size:10px;color:#5f6657}
+.sample-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.sample-list li{display:grid;grid-template-columns:minmax(0,1fr) minmax(220px,300px) auto;gap:12px;align-items:center;border:1px solid var(--line);border-radius:8px;padding:8px 12px}
+.sample-list li.chosen{border-color:#2f3a26;background:#f3f6ee}
+.sample-list strong{display:block;font-size:12px;color:var(--ink)}.sample-list small{font-size:10px;color:#5f6657}
+.sample-list audio{width:100%;height:32px}
+.count-pill{font-size:11px;color:#5f6657;white-space:nowrap}
+.tiktok-list ul{margin:8px 0;padding-left:18px}.tiktok-list li{margin:4px 0}.tiktok-list a{color:#46603a}
+.watched{color:#5f6657;font-size:11px}
+@media(max-width:700px){.sample-list li{grid-template-columns:1fr}}

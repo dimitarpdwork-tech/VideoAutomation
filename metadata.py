@@ -4,6 +4,8 @@ Kept free of third-party imports so production and upload can both use it.
 """
 import re
 
+import delivery
+
 TITLE_LIMIT = 100
 DESCRIPTION_LIMIT = 4900   # YouTube allows 5000 bytes; leave headroom.
 TAGS_LIMIT = 450           # YouTube allows 500 characters across all tags.
@@ -11,7 +13,7 @@ HOOK_LIMIT = 220
 
 
 def _clean(text):
-    text = re.sub(r'\[([^\]]+)\]\(https?://[^)]+\)', r'\1', text or '')
+    text = re.sub(r'\[([^\]]+)\]\(https?://[^)]+\)', r'\1', delivery.strip(text or ''))
     return re.sub(r'\s+', ' ', text.replace('<', '').replace('>', '')).strip()
 
 

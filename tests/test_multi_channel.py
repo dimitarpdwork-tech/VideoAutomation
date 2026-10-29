@@ -59,7 +59,7 @@ class ChannelTests(unittest.TestCase):
         self.assertTrue((folder/'story_used.mp4').exists())
     def test_production_settings_and_cross_channel_duplicates(self):
         bg=self.root/'backgrounds';bg.mkdir();(bg/'background_000.mp4').write_bytes(b'background')
-        story={'id':'abc','title':'A story','text':' '.join(['hello']*70),'text_source':'post_page'}
+        story={'id':'abc','title':'A story','text':' '.join(['hello']*70),'text_source':'original'}
         for id in ('main','second'):channels.write_json(channels.paths(id)['stories']/'abc.json',story)
         c=channels.load_channel('main');c['voice']='am_adam';channels.write_json(channels.CHANNELS/'main/config.json',c)
         voices=[]

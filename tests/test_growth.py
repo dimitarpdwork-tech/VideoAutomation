@@ -253,7 +253,7 @@ class GeneratorTests(unittest.TestCase):
         client.messages.create.side_effect = [self.reply('A moat for my neighbour', self.source_text),
                                               self.reply('The bakery that changed its rules daily', original)]
         logs = []
-        created = story_generator.generate('main', 1, client=client, log=logs.append)
+        created = story_generator.generate('main', 1, client=client, log=logs.append, mode='themes')
         self.assertEqual(len(created), 1)
         self.assertTrue(any('originality check' in line for line in logs))
         saved = json.loads(next((self.root / 'stories').glob('gen_*.json')).read_text())
@@ -277,7 +277,7 @@ class GeneratorTests(unittest.TestCase):
         length, low, high = story_generator.length_target(config, 'auto')
         self.assertEqual(length, 'full')
         self.assertGreaterEqual(low, 900)
-        parsed = story_generator.parse_reply('<json>' + json.dumps({'title': 'T', 'text': 'word ' * 100, 'teaser_sentences': 5}) + '</json>', 'full')
+        parsed = story_generator.parse_reply('<json>' + json.dumps({'title': 'T', 'text': 'The door was open. ' * 25, 'teaser_sentences': 5}) + '</json>', 'full')
         self.assertEqual(parsed['teaser_sentences'], 5)
         with self.assertRaises(story_generator.GenerationError):
             story_generator.parse_reply('no json here', 'short')

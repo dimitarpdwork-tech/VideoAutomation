@@ -19,7 +19,8 @@ def voice_for(gender, default, male=None, female=None):
     return family[gender]
 
 
-def select_voice(story, default='af_heart', male=None, female=None):
+def narrator_gender(story):
+    """('male' | 'female' | None, reason) from the story's first-person clues."""
     override = story.get('narrator_gender', '').lower()
     text = story.get('title', '') + '. ' + story.get('text', '')
     # Quoted characters must not determine the narrator's identity.
@@ -38,14 +39,31 @@ def select_voice(story, default='af_heart', male=None, female=None):
         if re.search(pattern, text, re.I): explicit.add(gender)
     if len(explicit) == 1:
         gender = explicit.pop()
-        return voice_for(gender, default, male, female), 'explicit ' + gender + ' narrator clue'
+        return gender, 'explicit ' + gender + ' narrator clue'
     if len(explicit) > 1:
-        return default, 'conflicting clues; channel default'
+        return None, 'conflicting clues; channel default'
     # Relationship inference is a fallback requested for this project, not certainty.
     has_partner_f = bool(re.search(r'\bmy (?:girlfriend|gf|wife)\b', text, re.I))
     has_partner_m = bool(re.search(r'\bmy (?:boyfriend|bf|husband)\b', text, re.I))
     if has_partner_f and not has_partner_m:
-        return voice_for('male', default, male, female), 'relationship inference: my girlfriend/gf/wife'
+        return 'male', 'relationship inference: my girlfriend/gf/wife'
     if has_partner_m and not has_partner_f:
-        return voice_for('female', default, male, female), 'relationship inference: my boyfriend/bf/husband'
-    return default, 'no clear narrator clue; channel default'
+        return 'female', 'relationship inference: my boyfriend/bf/husband'
+    return None, 'no clear narrator clue; channel default'
+
+
+def select_voice(story, default='af_heart', male=None, female=None):
+    """Kokoro voice ID for the story's narrator, with the reason."""
+    gender, reason = narrator_gender(story)
+    return (voice_for(gender, default, male, female) if gender else default), reason
+
+
+def select_clip(story, default='', male=None, female=None):
+    """Chatterbox reference clip for the story's narrator ('' = built-in voice).
+
+    Without a male/female clip for the narrator's gender, the channel's clip is kept:
+    a channel sounds like one narrator unless you set both.
+    """
+    gender, reason = narrator_gender(story)
+    chosen = {'male': male, 'female': female}.get(gender) if gender else None
+    return (chosen or default or ''), (reason if chosen else reason + '; channel narrator clip')

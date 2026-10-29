@@ -51,6 +51,22 @@ CHANNEL_DEFAULTS = {
     'voice_male': None, 'voice_female': None,
     'caption_font': 'Arial Black', 'caption_color': '#FFD400', 'phrase_color': '#FFFFFF',
     'color_grade': 'none',
+    # Narration engine. 'kokoro' is fast and light; 'chatterbox' sounds human, acts
+    # out delivery cues and clones a narrator from a short clip in voices/ ('' =
+    # its built-in voice). Chatterbox needs setup_voice and ideally an NVIDIA card.
+    'voice_engine': 'kokoro', 'voice_clip': '', 'voice_clip_male': None, 'voice_clip_female': None,
+    'chatterbox_model': 'standard', 'expressiveness': 0.5,
+    # Picture behind the narration: 'clips' (background videos) or 'image' (one
+    # free-licence atmospheric photo per story, slowly panned).
+    'background_mode': 'clips', 'image_keywords': [],
+    # Stories collected from Reddit: 'rewrite' uses them only as concepts for new
+    # original stories (default); 'narrate' reads them as they are (only with the
+    # author's permission).
+    'collected_stories': 'rewrite',
+    # Long format: how many words the story generator writes (chaptered).
+    'long_target_words': 12000,
+    # TikTok export: full videos are cut into vertical parts of about this length.
+    'tiktok_part_seconds': 75, 'tiktok_hashtags': [],
     'schedule': {'enabled': False, 'timezone': 'Europe/Berlin', 'times': ['10:00', '18:00']},
 }
 
@@ -63,6 +79,10 @@ PRESETS = {
         'period_pause': 0.35, 'caption_style': 'phrases', 'caption_font': 'Georgia', 'phrase_color': '#E8E2D0',
         'caption_color': '#C8102E', 'color_grade': 'cold', 'music_volume': 0.10,
         'hashtags': ['#horrorstories', '#scarystories'], 'tags': ['horror story', 'scary story', 'creepy'],
+        'voice_engine': 'chatterbox', 'expressiveness': 0.6, 'background_mode': 'image',
+        'image_keywords': ['abandoned house night', 'dark forest fog', 'empty hallway dark', 'old staircase shadows',
+                           'foggy road night', 'abandoned hospital corridor', 'dark window night house'],
+        'tiktok_hashtags': ['#horrortok', '#scarystories', '#creepy'],
         'teaser_ctas': ['You do not want to miss how this ends. The full story is linked above my name.',
                         'It gets so much worse. Tap the link above my name for the rest.',
                         'The ending still keeps me up at night. Full story above my name.'],
@@ -74,12 +94,16 @@ PRESETS = {
         'period_pause': 0.6, 'caption_style': 'phrases', 'caption_font': 'Palatino Linotype',
         'phrase_color': '#F3E9D2', 'color_grade': 'warm', 'music_volume': 0.08, 'title_card': False,
         'progress_bar': False, 'hashtags': ['#sleepstory', '#history'], 'tags': ['sleep story', 'history for sleep'],
+        'voice_engine': 'chatterbox', 'expressiveness': 0.35, 'background_mode': 'image', 'long_target_words': 15000,
+        'image_keywords': ['ancient ruins sunset', 'medieval castle mist', 'old library candles', 'roman forum ruins',
+                           'stone village night', 'ancient egypt temple'],
         'schedule': {'timezone': 'America/New_York', 'times': ['22:00']},
     },
     'drama': {
         'story_category': 'Revenge and workplace drama', 'video_format': 'funnel', 'voice': 'af_heart',
         'speed': 1.1, 'period_pause': 0.15, 'caption_style': 'words', 'caption_font': 'Arial Black',
         'caption_color': '#FFD400', 'color_grade': 'none', 'music_volume': 0.12,
+        'voice_engine': 'chatterbox', 'expressiveness': 0.55, 'tiktok_hashtags': ['#storytime', '#revenge', '#drama'],
         'hashtags': ['#storytime', '#revenge'], 'tags': ['revenge story', 'storytime', 'drama'],
         'teaser_ctas': ['Wait until you hear what they did next. Full story above my name.',
                         'This is only the beginning. The rest is linked above my name.',
@@ -299,6 +323,9 @@ def lock(name, wait=0):
     return file_lock(SHARED / (name + '.lock'), name, wait)
 
 
+ANALYTICS_SCOPE = 'https://www.googleapis.com/auth/yt-analytics.readonly'
+
+
 class SignInExpired(RuntimeError):
     """The saved Google sign-in no longer works; the channel must be reconnected."""
 
@@ -319,7 +346,11 @@ def credentials_for(channel, connect=False):
     channel_paths = paths(channel)
     token = channel_paths['credentials'] / 'channel_token.json'
     marker = channel_paths['credentials'] / 'reconnect_needed.json'
-    scopes = ['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube.readonly']
+    # New sign-ins also grant read-only YouTube Analytics (watch time and retention).
+    # Saved sign-ins keep the permissions they were given: they are loaded with their
+    # own scopes, because asking Google to refresh a token for more than it granted fails.
+    scopes = ['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube.readonly',
+              ANALYTICS_SCOPE]
     if connect:
         # A fresh sign-in never depends on the old token, which may be the broken part.
         token.parent.mkdir(parents=True, exist_ok=True)
@@ -333,7 +364,7 @@ def credentials_for(channel, connect=False):
                                       authorization_prompt_message='Choose the Google / YouTube channel for this profile in your browser.',
                                       success_message='Channel authorization received. Return to the dashboard.')
     else:
-        creds = Credentials.from_authorized_user_file(str(token), scopes) if token.exists() else None
+        creds = Credentials.from_authorized_user_file(str(token)) if token.exists() else None
         if creds and creds.expired and creds.refresh_token:
             try:
                 creds.refresh(Request())

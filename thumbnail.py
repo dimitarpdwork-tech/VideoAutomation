@@ -85,20 +85,23 @@ def render(background, title):
     return image
 
 
-def make(video, title, out):
-    render(frame(video), title).save(out, 'JPEG', quality=90, optimize=True)
+def make(video, title, out, image=None):
+    background = Image.open(image).convert('RGB') if image else frame(video)
+    render(background, title).save(out, 'JPEG', quality=90, optimize=True)
     if Path(out).stat().st_size > 2_000_000:  # YouTube's thumbnail limit
-        render(frame(video), title).save(out, 'JPEG', quality=75, optimize=True)
+        render(background, title).save(out, 'JPEG', quality=75, optimize=True)
     return out
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--video', type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument('--video', type=Path)
+    source.add_argument('--image', type=Path, help='Use this picture instead of a video frame')
     parser.add_argument('--title', required=True)
     parser.add_argument('--out', type=Path, required=True)
     args = parser.parse_args()
-    make(args.video, args.title, args.out)
+    make(args.video, args.title, args.out, args.image)
     print(f'Saved thumbnail {args.out}', flush=True)
 
 

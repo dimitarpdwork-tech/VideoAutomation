@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import re
+import delivery
 import speech
 from voice_selection import select_voice
 from difflib import SequenceMatcher
@@ -132,6 +133,30 @@ def add_period_pauses(audio, words, sample_rate, seconds):
     return np.concatenate(pieces), shifted, len(boundaries)
 
 
+def build_script(story, include_title=True, clean=False):
+    """The text to speak, still carrying delivery cue marks, plus cleanup notes.
+
+    Shared by both narration engines (Kokoro here, Chatterbox in chatterbox_narrator.py).
+    """
+    marked = {**story, 'text': delivery.to_marks(story.get('text', ''))}
+    script, removed_passages, title_already_present = prepare_script(marked, include_title)
+    script = speech.for_narration(script, clean=clean)
+    source_words = len(re.findall(r'\w+', delivery.strip(story.get('text', ''))))
+    kept_words = len(re.findall(r'\w+', script))
+    if source_words >= 30 and kept_words < MIN_KEPT * source_words:
+        raise RuntimeError(f'Cleanup kept only {kept_words} of {source_words} words; check the story text. '
+                           'Narration was not generated.')
+    return script, removed_passages, title_already_present
+
+
+def check_script(script, output, removed_passages, title_already_present):
+    """Save the cleanup report; stop if the script repeats itself."""
+    review = repetition_review(delivery.remove_marks(script))
+    (output/'cleanup.json').write_text(json.dumps({'removed_passages':removed_passages,'title_already_present':title_already_present,'review':review},ensure_ascii=False,indent=2),encoding='utf-8')
+    if review:
+        raise RuntimeError('Potential repeated sentences need review; see cleanup.json. Narration was not generated.')
+
+
 def main():
     global _ESPEAK_READY
     parser = argparse.ArgumentParser(description=__doc__)
@@ -155,23 +180,16 @@ def main():
     story = json.loads(args.story.read_text(encoding='utf-8-sig'))
     if not story.get('text', '').strip():
         parser.error('story has no text')
-    script, removed_passages, title_already_present = prepare_script(story, not args.body_only)
-    script = speech.for_narration(script, clean=args.clean_language)
-    source_words = len(re.findall(r'\w+', story.get('text', '')))
-    kept_words = len(re.findall(r'\w+', script))
-    if source_words >= 30 and kept_words < MIN_KEPT * source_words:
-        raise RuntimeError(f'Cleanup kept only {kept_words} of {source_words} words; check the story text. '
-                           'Narration was not generated.')
+    script, removed_passages, title_already_present = build_script(story, not args.body_only, args.clean_language)
+    # Kokoro reads every line the same way, so delivery cues are simply dropped.
+    script = delivery.remove_marks(script)
     if args.fixed_voice:
         voice_reason = 'chosen once for the whole story by production'
     else:
         args.voice, voice_reason = select_voice(story, args.voice)
     output = args.output or ROOT / 'narrations' / args.story.stem / f'{args.voice}_{args.speed:g}_pause{args.period_pause:g}'
     output.mkdir(parents=True, exist_ok=True)
-    review = repetition_review(script)
-    (output/'cleanup.json').write_text(json.dumps({'removed_passages':removed_passages,'title_already_present':title_already_present,'review':review},ensure_ascii=False,indent=2),encoding='utf-8')
-    if review:
-        raise RuntimeError('Potential repeated sentences need review; see cleanup.json. Narration was not generated.')
+    check_script(script, output, removed_passages, title_already_present)
 
     import numpy as np
     import soundfile as sf

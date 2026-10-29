@@ -1,5 +1,6 @@
 import {createProfile, connectChannel, cancelConnection, produce, saveSettings, addStory, preschedule, generateStories,
-  autopilot, saveApiKey, markRelatedDone, review, editTitle, isLocalRequest} from '../../../lib/studio';
+  autopilot, saveApiKey, markRelatedDone, review, editTitle, makeVoiceSamples, exportTikTok, savePexelsKey,
+  isLocalRequest} from '../../../lib/studio';
 
 const actions = {
   'create': body => createProfile(body.id, body.name, body.preset),
@@ -15,6 +16,9 @@ const actions = {
   'related-done': body => markRelatedDone(body.channel, body.teaserId),
   'review': body => review(body.channel, body.batch, body.names, body.decision, body.note),
   'edit-title': body => editTitle(body.channel, body.batch, body.name, body.title),
+  'voice-samples': body => makeVoiceSamples(body.channel),
+  'tiktok': body => exportTikTok(body.channel),
+  'pexels-key': body => savePexelsKey(body.key, body.confirmRemove === true),
 };
 
 export async function POST(request) {

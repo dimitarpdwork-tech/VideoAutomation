@@ -19,13 +19,16 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import delivery
+import image_picker
 import metadata as video_metadata
 import narrate
 import speech
 import variety
+import voice_worker
 from channel_config import (paths, load_channel, lock, SHARED, read_json, write_json, update_json,
                             story_fingerprint, venv_python)
-from voice_selection import select_voice
+from voice_selection import select_clip, select_voice
 
 ROOT = Path(__file__).resolve().parent
 SHORTS_LIMIT = 179
@@ -33,7 +36,7 @@ MAX_SPEEDUP = 1.2
 WORDS_PER_SECOND = 2.6
 WORD_RE = r"\b\w+(?:['’\-]\w+)*\b"
 # Fields other programs write into batch.json while a batch is still rendering.
-EXTERNAL_FIELDS = ('full_video_id', 'full_publish_at', 'review', 'reviewed_at', 'review_note', 'title')
+EXTERNAL_FIELDS = ('full_video_id', 'full_publish_at', 'review', 'reviewed_at', 'review_note', 'title', 'tiktok')
 
 
 def safe_name(text, limit=60):
@@ -80,10 +83,14 @@ def eligible_story(path, story, config):
     # pages, generated stories, stories you wrote yourself) is accepted.
     if story.get('text_source') == 'feed_preview' or not story.get('text', '').strip():
         return None
+    # Collected Reddit stories are concept sources for the story generator, not
+    # scripts, unless the channel is set to narrate them (with permission).
+    if story.get('text_source') == 'post_page' and config.get('collected_stories', 'rewrite') != 'narrate':
+        return None
     title = story.get('title', '').strip()
     if not title or len(title) > 100 or any(c in title for c in '<>'):
         return None
-    count = word_count(title + ' ' + story['text'])
+    count = word_count(title + ' ' + delivery.strip(story['text']))
     low, high = limits(config)
     return count if low <= count <= high else None
 
@@ -163,24 +170,66 @@ def plan_batch(args, config, channel_paths, backgrounds, usage):
                 'format': video_format,
                 'description': meta['description'], 'tags': meta['tags'],
                 'generated': story.get('text_source') == 'generated',
-                'background': backgrounds[i % len(backgrounds)].name,
+                'background': backgrounds[i % len(backgrounds)].name if backgrounds else None,
                 'story_hash': story_fingerprint(story['text']),
                 'name': f'{i + 1:02d}_{safe_name(Path(name).stem)}', 'status': 'pending',
                 'review': 'pending', 'synthetic_realistic': bool(story.get('synthetic_realistic'))}
-        item['voice'], item['voice_reason'] = select_voice(story, config['voice'], config.get('voice_male'),
-                                                           config.get('voice_female'))
+        if config.get('voice_engine') == 'chatterbox':
+            item['voice_clip'], item['voice_reason'] = select_clip(story, config.get('voice_clip') or '',
+                                                                   config.get('voice_clip_male'), config.get('voice_clip_female'))
+            item['voice'] = 'chatterbox:' + (Path(item['voice_clip']).stem if item['voice_clip'] else 'built-in')
+        else:
+            item['voice'], item['voice_reason'] = select_voice(story, config['voice'], config.get('voice_male'),
+                                                               config.get('voice_female'))
         if video_format in ('funnel', 'long'):
             item['full_description'] = video_metadata.build(story, config, 'full')['description']
         if funnel:
             item['cta'] = rng.choice(ctas)
-        item['opening'] = variety.first_sentence(speech.strip_meta(story['text']))
+        item['opening'] = variety.first_sentence(delivery.strip(speech.strip_meta(story['text'])))
         item['variety_warnings'] = variety.check(item['title'], item['opening'], recent)
+        slow = variety.hook_problem(story['text'])
+        if slow:
+            item['variety_warnings'].append(f'Weak hook: {slow}. Viewers decide in the first seconds.')
         recent.append({'title': item['title'], 'opening': item['opening']})
         plan.append(item)
     return plan
 
 
-def run_narration(source, output, config, voice=None):
+_WORKER = None
+
+
+def chatterbox():
+    """The batch's Chatterbox narrator (started on first use, closed by main)."""
+    global _WORKER
+    if _WORKER is None:
+        _WORKER = voice_worker.VoiceWorker()
+    return _WORKER
+
+
+def close_worker():
+    global _WORKER
+    if _WORKER is not None:
+        _WORKER.close()
+        _WORKER = None
+
+
+def run_narration(source, output, config, voice=None, clip=None, item=None):
+    if config.get('voice_engine') == 'chatterbox':
+        if clip is None:
+            clip = config.get('voice_clip') or ''
+        chatterbox().model = config.get('chatterbox_model') or 'standard'
+        try:
+            meta = chatterbox().narrate(story_path=source, output=output, clip=clip, speed=config['speed'],
+                                        period_pause=config['period_pause'], clean=config.get('clean_language', True),
+                                        expressiveness=config.get('expressiveness', 0.5))
+        except voice_worker.VoiceError as exc:
+            if exc.needs_review:
+                raise NeedsReview(str(exc)) from exc
+            raise
+        if item is not None and meta.get('quality_warnings'):
+            # Shown in Review next to the video, so you listen to those lines.
+            item.setdefault('narration_warnings', []).extend(meta['quality_warnings'])
+        return meta
     sys.argv = ['narrate.py', str(source), '--output', str(output), '--voice', voice or config['voice'],
                 '--speed', str(config['speed']), '--period-pause', str(config['period_pause'])]
     if voice:
@@ -205,9 +254,34 @@ def fit_to_shorts(narration, meta):
     subprocess.run([python(), str(ROOT / 'fit_narration.py'), str(narration), '--seconds', str(SHORTS_LIMIT)], check=True)
 
 
+def ensure_image(item, config, story):
+    """Pick the story's background photo (image mode); fall back to a clip if none is found."""
+    if config.get('background_mode') != 'image':
+        return
+    if item.get('image') and (ROOT / item['image']).is_file():
+        return
+    orientation = 'portrait' if item.get('format', 'shorts') == 'shorts' else 'landscape'
+    try:
+        path = image_picker.pick(story, config, config.get('id') or 'main', Path(item['story']).stem, orientation,
+                                 log=lambda m: print(m, flush=True))
+    except image_picker.NoImage as exc:
+        if item.get('background'):
+            item.setdefault('variety_warnings', []).append(f'No image found, so a background clip was used: {exc}')
+            return
+        raise
+    item['image'] = path.relative_to(ROOT).as_posix()
+
+
+def background_args(item):
+    if item.get('image'):
+        return ['--image', str(ROOT / item['image'])]
+    if not item.get('background'):
+        raise RuntimeError('No background: add clips to backgrounds/ or set the channel to use images.')
+    return ['--background', str(ROOT / 'backgrounds' / item['background'])]
+
+
 def render(narration, item, config, dest, filename, layout):
-    command = [python(), str(ROOT / 'make_video.py'), '--narration', str(narration),
-               '--background', str(ROOT / 'backgrounds' / item['background']),
+    command = [python(), str(ROOT / 'make_video.py'), '--narration', str(narration), *background_args(item),
                '--destination', str(dest), '--name', item['name'], '--format', layout,
                '--caption-style', config['caption_style']]
     if filename:
@@ -243,8 +317,9 @@ def validate(video, expected_seconds=None):
 
 def produce_short(item, config, channel_paths, batch, dest):
     source = channel_paths['stories'] / item['story']
+    ensure_image(item, config, read_json(source))
     narration = channel_paths['narrations'] / source.stem / batch
-    meta = run_narration(source, narration, config, item.get('voice'))
+    meta = run_narration(source, narration, config, item.get('voice'), item.get('voice_clip'), item)
     fit_to_shorts(narration, meta)
     render(narration, item, config, dest, None, 'vertical')
     output = dest / (item['name'] + ('_yellow_words' if config['caption_style'] == 'words' else '') + '.mp4')
@@ -256,8 +331,9 @@ def produce_short(item, config, channel_paths, batch, dest):
 def produce_full(item, config, channel_paths, batch, dest):
     """Narrate and render the horizontal full video plus its thumbnail."""
     source = channel_paths['stories'] / item['story']
+    ensure_image(item, config, read_json(source))
     base = channel_paths['narrations'] / source.stem / batch
-    full_meta = run_narration(source, base / 'full', config, item.get('voice'))
+    full_meta = run_narration(source, base / 'full', config, item.get('voice'), item.get('voice_clip'), item)
     limit = config.get('max_full_minutes', 15) * 60
     if full_meta['duration_seconds'] > limit:
         raise NeedsReview(f"Full narration is {full_meta['duration_seconds'] / 60:.1f} min; the limit is "
@@ -268,8 +344,9 @@ def produce_full(item, config, channel_paths, batch, dest):
     full_meta = read_json(base / 'full' / 'metadata.json')
     validate(dest / full_name, full_meta['duration_seconds'])
     thumb = dest / (item['name'] + '_full.jpg')
-    subprocess.run([python(), str(ROOT / 'thumbnail.py'), '--video', str(ROOT / 'backgrounds' / item['background']),
-                    '--title', item['title'], '--out', str(thumb)], check=False)
+    picture = ['--image', str(ROOT / item['image'])] if item.get('image') else \
+        ['--video', str(ROOT / 'backgrounds' / (item.get('background') or ''))]
+    subprocess.run([python(), str(ROOT / 'thumbnail.py'), *picture, '--title', item['title'], '--out', str(thumb)], check=False)
     return full_name, thumb, full_meta
 
 
@@ -287,7 +364,7 @@ def produce_funnel(item, config, channel_paths, batch, dest):
     try:
         teaser_story = base / 'teaser_story.json'
         write_json(teaser_story, {**story, 'text': teaser_text(story, config, item.get('cta'))})
-        teaser_meta = run_narration(teaser_story, base / 'teaser', config, item.get('voice'))
+        teaser_meta = run_narration(teaser_story, base / 'teaser', config, item.get('voice'), item.get('voice_clip'), item)
         fit_to_shorts(base / 'teaser', teaser_meta)
         teaser_name = item['name'] + '_teaser.mp4'
         render(base / 'teaser', item, config, dest, teaser_name, 'vertical')
@@ -312,6 +389,9 @@ def main():
     if not 1 <= args.count <= 100:
         parser.error('count must be between 1 and 100')
     config = load_channel(args.channel)
+    if config.get('voice_engine') == 'chatterbox' and not voice_worker.installed():
+        raise SystemExit('This channel uses the Chatterbox voice, which is not installed yet. Run setup_voice.cmd '
+                         '(Windows) or ./setup_voice.sh, or choose the Kokoro voice in Settings.')
     if args.max_words is not None:
         key = 'full_max_words' if config.get('video_format') == 'funnel' else 'max_words'
         if not 1 <= args.max_words <= 5000:
@@ -326,8 +406,10 @@ def main():
     background_dir = ROOT / 'backgrounds'
     backgrounds = ([background_dir / name for name in config['backgrounds']] if config['backgrounds']
                    else sorted(background_dir.glob('*.mp4')))
-    if not backgrounds or any(not p.is_file() or p.resolve().parent != background_dir.resolve() for p in backgrounds):
-        raise RuntimeError('No valid background clips selected. Add vertical MP4s to backgrounds/.')
+    if any(not p.is_file() or p.resolve().parent != background_dir.resolve() for p in backgrounds):
+        raise RuntimeError('A selected background clip is missing from backgrounds/; check Settings.')
+    if not backgrounds and config.get('background_mode') != 'image':
+        raise RuntimeError('No background clips. Add MP4s to backgrounds/, or set the channel to use one image per story.')
     dest.mkdir(parents=True, exist_ok=True)
     plan_path = dest / 'batch.json'
     if plan_path.exists():
@@ -413,6 +495,7 @@ def main():
             completed += 1
             print(f"Completed {item['name']}; marked {used.name}", flush=True)
     finally:
+        close_worker()
         # Whatever stopped the run, unfinished stories go back to the library.
         for item in plan:
             if item['status'] not in ('complete',):

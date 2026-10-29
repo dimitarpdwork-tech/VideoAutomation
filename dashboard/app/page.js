@@ -20,12 +20,14 @@ function Icon({type, size = 20}) {
 function nextStep(data) {
   if (!data) return null;
   const c = data.channel;
-  if (!data.backgroundFiles.length) return ['Add a background video', 'Put at least one MP4 you have the rights to use in the backgrounds folder.'];
+  if (!data.backgroundFiles.length && !data.imageMode) return ['Add a background video', 'Put at least one MP4 you have the rights to use in the backgrounds folder, or switch Settings > Background to one photo per story.'];
+  if (c.voice_engine === 'chatterbox' && !data.voiceInstalled) return ['Install the Chatterbox voice', 'Run setup_voice (it downloads about 3 GB once), or switch Settings > Narration engine to Kokoro.'];
   if (c.token === 'expired') return ['Reconnect YouTube', 'The Google sign-in for this channel expired. Click "Reconnect channel".'];
   if (data.reviewItems.length) return [`Review ${data.reviewItems.length} video${data.reviewItems.length === 1 ? '' : 's'}`, 'Watch them below and approve the ones that are good enough to publish.'];
   if (data.related.length) return [`Link ${data.related.length} teaser${data.related.length === 1 ? '' : 's'} in YouTube Studio`, 'Set each teaser Short\'s Related video so viewers can tap through to the full story.'];
   if (c.token === 'missing' && data.stats.ready) return ['Connect YouTube', 'Approved videos are waiting; connect the channel to schedule them.'];
   if (data.stats.ready) return [`Schedule ${data.stats.ready} approved video${data.stats.ready === 1 ? '' : 's'}`, 'Use "Schedule on YouTube" so they publish at your set times.'];
+  if (!data.eligibleStories && data.conceptSources) return ['Generate stories', `${data.conceptSources} collected stories are waiting to be rewritten as originals. Click "Generate stories".`];
   if (!data.eligibleStories) return ['Add stories', 'Generate stories, write one, or collect some; none fit this channel right now.'];
   return ['Create the next batch', `${data.eligibleStories} stories are ready to become videos.`];
 }
@@ -98,7 +100,8 @@ export default function Home() {
           <div key={key}><strong>{data?.insights.updatedAt ? data.insights.totals[key].toLocaleString() : '—'}</strong><span>{label}</span></div>)}</div>
         {data?.insights.error && <p className="insights-note" role="alert">{data.insights.error}</p>}
         {data?.topPerformers?.length > 0 && <div className="top-list"><div className="eyebrow">TOP PERFORMERS · THE STORY GENERATOR LEARNS FROM THESE</div>
-          <ol>{data.topPerformers.map(v => <li key={v.videoId}><a href={'https://www.youtube.com/watch?v=' + v.videoId} target="_blank" rel="noreferrer">{v.title}</a><span>{v.views.toLocaleString()} views · {v.kind}</span></li>)}</ol></div>}
+          <ol>{data.topPerformers.map(v => <li key={v.videoId}><a href={'https://www.youtube.com/watch?v=' + v.videoId} target="_blank" rel="noreferrer">{v.title}</a><span>{v.views.toLocaleString()} views{v.watched != null ? ` · ${Math.round(v.watched)}% watched` : ''} · {v.kind}</span></li>)}</ol></div>}
+        {c?.connected && data?.insights.retention === 'reconnect' && <p className="insights-note">To see how much of each video people watch, click “Reconnect channel” once; the new sign-in includes read-only YouTube Analytics.</p>}
       </section>
       {error && <div role="alert" className="error">{error}<button onClick={() => { setError(''); refresh(); }}>Dismiss</button></div>}
       <div className="workspace"><section className="library"><div className="section-head"><div><h2>Video queue <span>{stats.total ?? 0}</span></h2><p>Click a video to watch it.</p></div>
@@ -111,7 +114,7 @@ export default function Home() {
               <div className="story-title" title={video.title}><span className={'kind ' + video.kind}>{({full: 'Full', teaser: 'Teaser', short: 'Short'})[video.kind]}</span>{video.generated && <span className="kind ai">AI story</span>}{video.title}</div>
               <small>{video.batch.replace('_', ' ')}</small></div></div></td>
             <td className="duration">{time(video.duration)}</td>
-            <td className="duration">{video.insights?.viewCount?.toLocaleString() ?? '—'}</td>
+            <td className="duration">{video.insights?.viewCount?.toLocaleString() ?? '—'}{video.insights?.averageViewPercentage != null && <small className="watched" title="Average percentage watched"> · {Math.round(video.insights.averageViewPercentage)}%</small>}</td>
             <td><span className={'badge ' + video.status}><i/>{video.status === 'scheduled' ? 'Scheduled ' + new Date(video.publishAt).toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'}) : STATUS[video.status]}</span></td>
             <td>{video.videoId && <a className="external" onClick={e => e.stopPropagation()} href={'https://www.youtube.com/watch?v=' + video.videoId} target="_blank" rel="noreferrer" aria-label={'View on YouTube: ' + video.title}>↗</a>}</td></tr>)}
         </tbody></table>{rows.length === 0 && <div className="empty">{data ? 'No videos in this view.' : 'Loading your workspace…'}</div>}</div></section>

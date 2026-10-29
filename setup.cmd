@@ -23,6 +23,9 @@ if errorlevel 1 goto npmfailed
 call npm.cmd run build
 if errorlevel 1 goto npmfailed
 popd
+rem The human-sounding Chatterbox voice; optional, so a failure here does not stop setup.
+%PYTHON312% setup_voice.py
+if errorlevel 1 echo Note: Chatterbox voice setup did not finish; run setup_voice.cmd later. Kokoro narration works.
 echo Setup complete. Read README.md to add your credentials and backgrounds.
 pause
 exit /b 0

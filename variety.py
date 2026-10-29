@@ -25,6 +25,26 @@ def first_sentence(text):
     return match[0][:200] if match else ''
 
 
+SLOW_OPENERS = re.compile(
+    r"^\W*(?:so\b|ok(?:ay)?\b|hi\b|hello\b|hey\b|this (?:is|happened|story)\b|let me\b|before i (?:start|begin)\b|"
+    r"i (?:never|always|don'?t usually) (?:thought|believed|post|do)\b|throwaway\b|long post\b|first (?:time )?post\b|"
+    r"english is not\b|sorry for\b|i'?ve been (?:lurking|reading)\b|disclaimer\b)", re.I)
+HOOK_WORDS = 28
+
+
+def hook_problem(text):
+    """Why the story's opening is not a hook, or None. Viewers decide in the first seconds."""
+    import delivery
+    first = first_sentence(delivery.strip(text or ''))
+    if not first:
+        return 'the story is empty'
+    if SLOW_OPENERS.match(first):
+        return f'it opens with a slow, generic line ("{first[:60]}") instead of a hook'
+    if len(re.findall(r"\w+", first)) > HOOK_WORDS:
+        return f'the first sentence is too long to work as a hook (keep it under {HOOK_WORDS - 3} words)'
+    return None
+
+
 def recent_items(channel, limit=RECENT):
     """Titles and openings of the channel's latest planned or uploaded videos."""
     rows = []

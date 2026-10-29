@@ -9,23 +9,29 @@ subscription or shared account.
 
 **What it does, end to end**
 
-1. **Stories in.** One click generates new fictional stories on the themes your
-   audience responds to (Claude API). You can also write your own, drop JSON
-   files into `stories/`, or collect top posts from a subreddit.
-2. **Narration.** [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M), a free
-   open-source voice model, reads the story locally. A male or female voice is
-   picked from narrator clues such as "I (24M)". Reddit shorthand (AITA, MIL,
-   "(25F)") is read as real words, and strong profanity can be softened so
-   videos stay advertiser-friendly.
-3. **Rendering.** FFmpeg puts captions over one of your background clips,
-   starting at a random point so reused backgrounds look different. Shorts get
-   a hook title card and a progress bar; optional music ducks under the voice.
-   Full videos are 1920×1080 and get an auto-made thumbnail.
+1. **Stories in.** One click turns the most-upvoted stories you collected from
+   Reddit into new, original stories that keep only the concept, or writes new
+   ones on the themes your audience responds to (Claude API). Every story opens
+   with a hook. You can also write your own or drop JSON files into `stories/`.
+2. **Narration.** [Chatterbox](https://github.com/resemble-ai/chatterbox), a free
+   open-source voice model that sounds human, reads the story on your computer
+   in a narrator voice cloned from a short clip, and acts out tense moments
+   (pauses, hushed lines). [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M)
+   is the fast, lighter alternative. Reddit shorthand (AITA, MIL, "(25F)") is
+   read as real words, and strong profanity can be softened so videos stay
+   advertiser-friendly.
+3. **Rendering.** FFmpeg puts captions over one atmospheric free-licence photo
+   per story, slowly panned under a vignette (found automatically), or over
+   your own background clips. Shorts get a hook title card and a progress bar;
+   optional music ducks under the voice. Full videos are 1920×1080 and get an
+   auto-made thumbnail.
 4. **Metadata.** Each video gets a title, a description that opens with the
    story's first lines, a credit link to the original post, hashtags and tags.
 5. **Publishing.** Upload now, or schedule a week of videos at once and let
    YouTube publish them at your chosen times while your computer is off.
-   **Autopilot** does steps 1-5 with one click.
+   **Autopilot** does steps 1-4 with one click and stops at your review.
+6. **TikTok.** Approved videos can be exported as vertical parts of just over a
+   minute, with captions to paste, for posting by hand.
 
 A dashboard at <http://127.0.0.1:3000> drives all of it; every step also has a
 command-line equivalent.
@@ -34,9 +40,13 @@ command-line equivalent.
 
 - Python 3.12 (the voice model does not support newer versions yet).
 - Node.js 20.9 or newer, with npm.
-- A few GB of disk for dependencies and the voice model.
+- About 10 GB of disk for dependencies and the voice models.
+- For Chatterbox, ideally an NVIDIA graphics card (any RTX card works). Without
+  one it runs on the processor, which is slow (several minutes per minute of
+  audio). Kokoro runs fine without a graphics card.
 - Your own Google Cloud project with an OAuth "Desktop app" client (see below).
-- At least one vertical (1080×1920) background MP4 you have the rights to use.
+- For the photo background nothing else; for the clip background, at least one
+  vertical (1080×1920) MP4 you have the rights to use.
 
 ## Install
 
@@ -49,10 +59,15 @@ pass its path: `setup.cmd "C:\Path\To\Python312\python.exe"`.
 ./setup.sh                      # or: ./setup.sh /path/to/python3.12
 ```
 
-Setup creates two Python environments (`.venv` for video/upload tools,
-`.venv-tts` for narration), builds the dashboard and creates an unconnected
-"Main channel" profile. It connects nothing and enables no automation. The voice
-model downloads on first use.
+Setup creates three Python environments (`.venv` for video/upload tools,
+`.venv-tts` for Kokoro, `.venv-voice` for Chatterbox), builds the dashboard and
+creates an unconnected "Main channel" profile. It connects nothing and enables
+no automation.
+
+The Chatterbox step (`setup_voice.py`) finds your NVIDIA card and installs the
+matching GPU build of PyTorch (RTX 50-series cards included), then downloads the
+voice model (about 3 GB). If it fails, setup still finishes and Kokoro works;
+run `setup_voice.cmd` / `./setup_voice.sh` again later.
 
 Start the dashboard with `start_dashboard.cmd` (Windows) or
 `./start_dashboard.sh`, keep the window open, and open <http://127.0.0.1:3000>.
@@ -88,9 +103,9 @@ channel types that set a distinct voice, look, format and posting time:
 
 | Type | Format | Voice and look | Posts (audience time) |
 |---|---|---|---|
-| Horror fiction | Full video + teaser Short | Slow male narrator, cold grade, serif phrase captions | 21:00 New York |
-| History stories for sleep | Long video only (2–3 hours) | Soft British female narrator, warm grade, no title card | 22:00 New York |
-| Revenge & drama stories | Full video + teaser Short | Brisk narrator, word-by-word captions | 17:30 New York |
+| Horror fiction | Full video + teaser Short | Chatterbox, dramatic; one dark photo per story; cold grade, serif phrase captions | 21:00 New York |
+| History stories for sleep | Long video only (2–3 hours) | Chatterbox, calm; one historic photo per story; warm grade, no title card | 22:00 New York |
+| Revenge & drama stories | Full video + teaser Short | Chatterbox, natural; background clips; word-by-word captions | 17:30 New York |
 
 Every setting can be changed afterwards. Schedule times are in your audience's
 time zone, not yours.
@@ -145,14 +160,71 @@ Choose per channel in **Settings → Format**.
   AI-written stories mark the best cliffhanger themselves; for other stories the
   teaser stops at a sentence break near the teaser length.
 
+## Narration voices
+
+Choose per channel in **Settings → Voice and look**.
+
+- **Chatterbox** (default for new channels) sounds like a person reading, and
+  follows the delivery cues the story generator writes into stories:
+  `[pause]` before a reveal, `[tense]`, `[whisper]`, `[urgent]` and `[calm]`
+  lines. The cues never show in captions or descriptions. **Expressiveness**
+  sets how dramatic it is (0.35 calm, 0.5 natural, 0.7 dramatic).
+- **Narrator clips.** Chatterbox clones a narrator from 10–30 seconds of clean
+  speech in the `voices` folder; each channel can have its own. **Settings →
+  Hear the narrators → Make voice samples** creates five starter clips made
+  with Kokoro voices (which belong to nobody, so there are no rights issues)
+  and reads the same short horror passage with each, so you can pick by ear.
+  Only use your own voice, a voice you have written permission for, or a
+  stock clip licensed for commercial use.
+- **Quality checks.** Chatterbox speaks a sentence or two at a time. A piece
+  that comes out far too short or long (a skipped or invented phrase) is
+  spoken again; if it still looks wrong, the video gets a warning in Review
+  naming the line to listen to. Captions are timed to the actual voice with a
+  forced aligner.
+- **Kokoro** is faster and needs no graphics card, but reads every line the
+  same way.
+
+Chatterbox adds an inaudible watermark (Resemble AI's "Perth") to its audio,
+as its licence intends; you will not hear it.
+
+## Background photos
+
+With **Settings → Format → Background: one photo per story**, each story gets
+one atmospheric photo, slowly panned under a vignette: the classic look of
+narrated horror and sleep channels.
+
+- The story generator suggests a search phrase per story (e.g. "abandoned
+  farmhouse at night"); otherwise the channel's image search phrases are used.
+- Sources: [Pexels](https://www.pexels.com/api/) with a free API key (Settings),
+  then [Openverse](https://openverse.org), limited to public-domain (CC0/PDM)
+  images. Both allow use in monetised videos without credit.
+- Every photo is used once across all channels. Where it came from is kept in
+  `output/shared/images_used.json` and shown in Review.
+- If no photo is found and the channel also has background clips, a clip is
+  used and Review says so.
+
 ## Generate stories with AI
 
 **Generate stories** writes new fictional stories with the Claude API.
 
-- **What it learns from:** your channel's own videos ranked by views, and
-  collected Reddit stories ranked by upvotes. It sees **titles and numbers
-  only**, never the story texts, and is told to write a completely new story
-  (new characters, events and details) on the themes that work.
+- **From collected stories (concepts):** while the channel has unused stories
+  collected from Reddit, it takes the most-upvoted one, keeps only its core
+  idea, and writes a new story around it with a different narrator,
+  characters, setting, events and ending. The result is checked against the
+  source (no shared 8-word phrase, near-zero overlap, a different title) and
+  rewritten if it is too close. Each collected story lends its concept once
+  and is never narrated itself, unless you set **Stories collected from
+  Reddit → Narrate them as they are** (only with the author's permission).
+- **From themes:** otherwise it writes from your channel's best videos (views
+  and average percentage watched) and collected titles ranked by upvotes,
+  seeing **titles and numbers only**.
+- **Hook first:** the first sentence must drop the listener into the story;
+  slow openers ("So this happened…", greetings, long first sentences) are
+  rejected and rewritten. Stories you add yourself get a "weak hook" warning
+  in Review instead.
+- **Long sleep stories** are written as an outline, then one chapter at a time,
+  to the length set in **Settings → Format** (default 15,000 words for the
+  sleep preset, about 2 hours).
 - **Originality guard:** every result is compared with every story in your
   library. Anything that shares too much wording, or has a near-identical
   title, is rejected and rewritten. This stops copying; it does not stop
@@ -238,7 +310,11 @@ The same story is never used twice, even across profiles.
 | Tags | Search tags sent with the upload |
 | Description templates | One for Shorts / teasers, one for full videos. Placeholders: `{hook}` first lines, `{credit}` link to the original, `{fiction_note}`, `{hashtags}`, `{title}`, `{category}`, `{full_url}` (teasers) |
 | Credit original author | Adds "Original story by u/…: link" when the story has a source |
-| Voice, speed, pause | Kokoro voice (e.g. `af_heart`, `am_michael`, `bf_emma`); optional male/female voices; speaking speed, pause after sentences |
+| Narration engine, narrator, expressiveness | Chatterbox (narrator clip from `voices/`, expressiveness, optional male/female clips, standard or turbo model) or Kokoro (voice ID such as `am_michael`, optional male/female voices) |
+| Speed, pause | Speaking speed, pause after sentences |
+| Background | One photo per story (search phrases in advanced settings) or background clips |
+| Stories collected from Reddit | Use only their concept (default) or narrate them as they are |
+| TikTok part length, hashtags | Target length of TikTok parts (never under 61 s) and the hashtags in their captions |
 | Captions | Yellow word-by-word or white phrases (full videos always use phrases) |
 | Hook title card | Seconds the title is shown at the start (0 = off) |
 | Progress bar, music volume | Shorts progress bar; volume of tracks from `music/` |
@@ -281,6 +357,32 @@ Custom thumbnails for full videos are uploaded automatically when your channel
 allows it (YouTube requires a phone-verified account); otherwise the `.jpg`
 next to the video is ready to upload in Studio.
 
+## TikTok
+
+**Export for TikTok** turns every approved video into vertical parts for
+TikTok, which pays (Creator Rewards) only for videos longer than one minute:
+
+- Full videos are re-cut from their narration at sentence ends into parts of
+  about the channel's TikTok part length, never under 61 seconds. Each part
+  starts with "Title · Part N" and ends with "Part N+1 is on my profile".
+- Shorts are exported as they are.
+- Files land in each batch folder under `tiktok/`: the videos, a caption file
+  per part, and `HOW_TO_POST.txt`. The dashboard lists them with download links.
+
+Posting stays manual: TikTok's posting API only allows private posts until
+TikTok approves an app, and a new account is safest posted by hand. TikTok asks
+creators to label realistic AI-generated audio, so switch on **AI-generated
+content** under *More options* when posting; it shows a small tag and labelled
+videos are not penalised. Creator Rewards also need 10,000 followers, 100,000
+views in 30 days and an eligible country.
+
+## Retention numbers
+
+Channels connected with this version also grant read-only YouTube Analytics.
+The dashboard then shows the average percentage watched next to views, and the
+story generator favours themes people watch to the end. Channels connected
+earlier keep working; click **Reconnect channel** once to add retention.
+
 ## Command line
 
 ```bash
@@ -290,6 +392,9 @@ next to the video is ready to upload in Studio.
 .venv/bin/python review.py --channel main list
 .venv/bin/python review.py --channel main approve --batch batch_20261029_120000
 .venv-tts/bin/python produce_batch.py --channel main --count 12
+.venv-tts/bin/python voice_samples.py
+.venv-voice/bin/python chatterbox_narrator.py stories/1nspy0i.json --clip starter_deep_male.wav
+.venv/bin/python tiktok_export.py --channel main
 .venv/bin/python upload_next.py --channel main --dry-run
 .venv/bin/python upload_next.py --channel main
 .venv/bin/python upload_next.py --channel main --publish-at 2026-11-02T18:00:00+02:00
