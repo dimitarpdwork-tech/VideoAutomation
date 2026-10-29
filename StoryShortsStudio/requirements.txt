@@ -1,0 +1,6 @@
+google-api-python-client>=2,<3
+google-auth-oauthlib>=1,<2
+imageio-ffmpeg>=0.5,<1
+tzdata
+Pillow>=10.1
+anthropic>=0.40

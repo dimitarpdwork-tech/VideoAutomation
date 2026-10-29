@@ -1,0 +1,36 @@
+.brand{font:700 15px Manrope,Arial,sans-serif;color:var(--ink)}
+.connection.ok i{background:#3c8a4a}.connection.off i{background:#b9b3a3}.connection.bad{color:#a4472e;font-weight:600}.connection.bad i{background:#c0412a}
+.next-step{background:#2f3a26;color:#f4f3ec;border-radius:14px;padding:22px 26px;margin:24px 0}
+.next-step .eyebrow{color:#cfd8c0}.next-step h1{font:700 24px Manrope,Arial,sans-serif;margin:6px 0}.next-step p{margin:0;font-size:13px;color:#e3e6da}
+.reason{display:block;font-size:11px;color:#8a5a12;margin-top:4px}
+.job{margin-top:10px}.job-error{background:#fbebeb;border:1px solid #efc6c0;color:#7a2a1d;border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.5;margin:10px 0}
+.channel-controls button.link{border:none;background:none;color:#46603a;text-decoration:underline;padding:0;font-size:12px;justify-self:start}
+.channel-message.inline{margin-left:12px}
+.failed-list{font-size:12px;color:#5f6657;margin-top:10px}.failed-list li{margin:4px 0}
+.review-panel{background:white;border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin-bottom:24px}
+.review-head{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;align-items:flex-start}
+.review-head h2{font:700 19px Manrope,Arial,sans-serif;margin:6px 0}.review-head p{font-size:12px;color:#5f6657;max-width:620px;line-height:1.6;margin:0}
+.bulk{display:flex;gap:8px;flex-wrap:wrap}.bulk button,.review-actions button,.title-row button,.part-tabs button{border:1px solid #dedfd6;border-radius:6px;background:#f8f9f4;padding:8px 12px;color:#3d4636;font-size:12px;cursor:pointer}
+.review-list{display:flex;flex-direction:column;gap:16px;margin-top:18px}
+.review-card{display:grid;grid-template-columns:minmax(0,320px) 1fr;gap:20px;border:1px solid var(--line);border-radius:12px;padding:16px}
+.review-card.warn{border-color:#f0d58a;background:#fffdf4}
+.review-media video{width:100%;border-radius:8px;background:#111;display:block}.review-media video.vertical{max-height:480px;aspect-ratio:9/16;object-fit:contain}
+.part-tabs{display:flex;gap:6px;margin-top:8px}.part-tabs button.active{background:#2f3a26;color:white;border-color:#2f3a26}
+.review-body{display:flex;flex-direction:column;gap:10px;min-width:0}
+.review-select{font-size:11px;color:#5f6657;display:flex;gap:6px;align-items:center}
+.review-title{display:flex;flex-direction:column;gap:6px;font-size:11px;color:#5f6657}.review-title small{color:#8a5a12}
+.title-row{display:flex;gap:8px}.title-row input{flex:1;font:inherit;font-size:14px;border:1px solid #dedfd6;border-radius:6px;padding:8px;color:var(--ink)}
+.review-warnings{margin:0;padding:10px 12px 10px 28px;background:#fff6dc;border-radius:8px;font-size:12px;color:#6b4e00}
+.review-body details{font-size:12px;color:#3d4636}.review-body pre{white-space:pre-wrap;font:inherit;margin:8px 0 0}.script{line-height:1.6;margin:8px 0 0}
+.review-meta{font-size:11px;color:#5f6657;margin:0}
+.review-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:auto}.review-actions input{flex:1;min-width:140px;font:inherit;font-size:12px;border:1px solid #dedfd6;border-radius:6px;padding:8px}
+.review-actions .approve{background:#2f3a26;color:white;border-color:#2f3a26;font-weight:600}.review-actions .reject{color:#7a2a1d}
+tr.clickable{cursor:pointer}tr.clickable:hover{background:#fafaf6}
+.badge.review{background:#fff3cf;color:#6b4e00}.badge.rejected{background:#fbebeb;color:#7a2a1d}.badge.ready{background:#e5f4e4;color:#245c2a}
+.badge.scheduled{background:#e7f1fb;color:#1f4f7a}.badge.checking,.badge.resumable{background:#f9ece7;color:#7a3e1d}
+.modal{position:fixed;inset:0;background:rgba(20,22,18,.72);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px}
+.modal-body{background:white;border-radius:14px;padding:18px;max-width:min(960px,100%);max-height:100%;overflow:auto;position:relative}
+.modal-body video{display:block;max-width:100%;max-height:75vh;border-radius:8px;background:#111;margin:0 auto}
+.modal-body h3{font:700 16px Manrope,Arial,sans-serif;margin:12px 0 4px}.modal-body p{margin:0;font-size:12px;color:#5f6657}
+.modal .close{position:absolute;top:6px;right:10px;border:none;background:none;font-size:26px;cursor:pointer;color:#3d4636}
+@media(max-width:760px){.review-card{grid-template-columns:1fr}.next-step h1{font-size:20px}}
