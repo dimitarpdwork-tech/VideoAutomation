@@ -4,7 +4,7 @@ Runs in its own environment (.venv-voice; install it with setup_voice.cmd or
 ./setup_voice.sh). Production starts it once per batch in --serve mode, so the
 model loads one time. You can also run it by hand:
 
-    .venv-voice\Scripts\python chatterbox_narrator.py stories\1nspy0i.json --clip voices\my_voice.wav
+    .venv-voice\Scripts\python chatterbox_narrator.py stories\my_story.json --clip voices\my_voice.wav
     .venv-voice\Scripts\python chatterbox_narrator.py --samples
 
 Output matches narrate.py (Kokoro): narration.wav, timings.json (word timings

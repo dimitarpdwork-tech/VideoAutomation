@@ -117,7 +117,7 @@ Invent the character behind that voice: who they are, how they talk, how they op
 original fiction (never claim the stories are true). Keep it subtle and atmospheric, never campy. The host must not
 name a real person or claim a real-world identity.
 
-Reply with one JSON object inside <json></json> tags with these fields:
+Return one JSON object through the submit tool, with these fields:
 "name": a short behind-the-scenes label such as "The Caretaker",
 "identity": 1-2 sentences on who the host is,
 "speech": 2-3 sentences on vocabulary, sentence length, rhythm, verbal habits and what they never do,
@@ -132,11 +132,10 @@ Reply with one JSON object inside <json></json> tags with these fields:
 
 def draft(description, config, client):
     """A persona dict drafted by Claude from the voice description."""
-    response = client.messages.create(
-        model=config.get('generator_model') or 'claude-sonnet-5-5', max_tokens=1200,
-        messages=[{'role': 'user', 'content': DRAFT_PROMPT.format(channel=config.get('name') or 'the channel',
-                                                                   description=description)}])
-    text = ''.join(block.text for block in response.content if getattr(block, 'type', '') == 'text')
+    import claude_json
+    text = claude_json.ask(client, config.get('generator_model') or 'claude-sonnet-5-5',
+                           DRAFT_PROMPT.format(channel=config.get('name') or 'the channel', description=description),
+                           max_tokens=2000)
     match = re.search(r'<json>\s*(\{.*\})\s*</json>', text, re.S) or re.search(r'(\{.*\})', text, re.S)
     if not match:
         raise RuntimeError('The reply contained no persona.')

@@ -538,3 +538,37 @@ class PersonaTests(unittest.TestCase):
         self.assertEqual(result['asides'], 'rare')          # unknown value falls back
         self.assertEqual(extras, {'expressiveness': 0.8, 'voice_character': 'uncanny'})
         self.assertIn('The Unlit Room', client.messages.create.call_args.kwargs['messages'][0]['content'])
+
+
+class ClaudeJsonTests(unittest.TestCase):
+    def reply(self, *blocks, stop='tool_use'):
+        client = MagicMock()
+        client.messages.create.return_value = SimpleNamespace(content=list(blocks), stop_reason=stop)
+        return client
+
+    def test_tool_reply_is_returned_as_json(self):
+        import claude_json
+        client = self.reply(SimpleNamespace(type='tool_use', input={'title': 'T', 'text': 'Line one.\nLine "two".'}))
+        text = claude_json.ask(client, 'm', 'prompt', 'system')
+        self.assertEqual(story_generator._json(text)['text'], 'Line one.\nLine "two".')
+        self.assertEqual(client.messages.create.call_args.kwargs['tool_choice'], {'type': 'tool', 'name': 'submit'})
+
+    def test_failures_say_why(self):
+        import claude_json
+        with self.assertRaisesRegex(claude_json.ReplyError, 'cut off'):
+            claude_json.ask(self.reply(SimpleNamespace(type='text', text='{"title": "T", "te'), stop='max_tokens'), 'm', 'p')
+        with self.assertRaisesRegex(claude_json.ReplyError, 'declined'):
+            claude_json.ask(self.reply(stop='refusal'), 'm', 'p')
+        with self.assertRaisesRegex(claude_json.ReplyError, 'no story in it \\("I would rather not'):
+            claude_json.ask(self.reply(SimpleNamespace(type='text', text='I would rather not write this.'), stop='end_turn'), 'm', 'p')
+
+    def test_generation_logs_the_reason(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            with patch.object(channels, 'ROOT', root), patch.object(channels, 'CHANNELS', root / 'channels'), \
+                    patch.object(story_generator, 'ROOT', root), patch.object(story_generator, 'CHANNELS', root / 'channels'):
+                channels.create_channel('night', 'Night', 'horror')
+                logs = []
+                created = story_generator.generate('night', 1, client=self.reply(stop='refusal'), log=logs.append)
+                self.assertEqual(created, [])
+                self.assertTrue(any('declined' in line for line in logs), logs)

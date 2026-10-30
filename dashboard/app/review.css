@@ -67,3 +67,10 @@ tr.clickable{cursor:pointer}tr.clickable:hover{background:#fafaf6}
 .persona-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.persona-actions input{flex:1;min-width:240px}
 .persona-actions small{font-size:10px;color:#5f6657}
 @media(max-width:700px){.persona-grid{grid-template-columns:1fr}}
+.working-bar{position:sticky;top:0;z-index:20;background:#2f3a26;color:#f4f3ec;border-radius:0 0 12px 12px;padding:10px 18px;margin-bottom:14px;display:flex;flex-direction:column;gap:4px;box-shadow:0 4px 14px rgba(0,0,0,.12)}
+.working-bar div{display:flex;gap:10px;align-items:center;font-size:12px;min-width:0}
+.working-bar strong{white-space:nowrap}.working-bar .step{color:#cfd8c0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,Menlo,monospace;font-size:11px}
+.pulse{width:8px;height:8px;border-radius:50%;background:#9fd18b;flex:none;animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+.toast{position:fixed;right:22px;bottom:22px;z-index:30;max-width:420px;background:#1f2619;color:#f4f3ec;border-radius:10px;padding:12px 16px;font-size:12px;line-height:1.5;box-shadow:0 8px 24px rgba(0,0,0,.25);cursor:pointer;white-space:pre-wrap}
+.toast small{display:block;color:#a9b49c;font-size:10px;margin-top:4px}
