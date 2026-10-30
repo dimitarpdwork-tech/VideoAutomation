@@ -255,6 +255,32 @@ def fit_to_shorts(narration, meta):
     subprocess.run([python(), str(ROOT / 'fit_narration.py'), str(narration), '--seconds', str(SHORTS_LIMIT)], check=True)
 
 
+def pick_image(story, config, item, orientation):
+    """Find the story's photo. Pillow lives in .venv; production may run in the voice environment without it."""
+    channel, key = config.get('id') or 'main', Path(item['story']).stem
+    try:
+        import PIL  # noqa: F401
+    except ImportError:
+        source = SHARED / 'images' / f'_{key}_story.json'
+        write_json(source, story)
+        try:
+            result = subprocess.run([python(), str(ROOT / 'image_picker.py'), '--channel', channel, '--story', str(source),
+                                     '--key', key, '--orientation', orientation], capture_output=True, text=True,
+                                    encoding='utf-8', errors='replace', cwd=ROOT)
+        finally:
+            source.unlink(missing_ok=True)
+        if result.stderr.strip():
+            print(result.stderr.strip(), flush=True)
+        lines = [line for line in result.stdout.splitlines() if line.startswith('{')]
+        if result.returncode or not lines:
+            raise image_picker.NoImage(f'the image search stopped ({(result.stderr or result.stdout).strip()[-300:]})')
+        reply = json.loads(lines[-1])
+        if reply.get('error'):
+            raise image_picker.NoImage(reply['error'])
+        return Path(reply['path'])
+    return image_picker.pick(story, config, channel, key, orientation, log=lambda m: print(m, flush=True))
+
+
 def ensure_image(item, config, story):
     """Pick the story's background photo (image mode); fall back to a clip if none is found."""
     if config.get('background_mode') != 'image':
@@ -263,8 +289,7 @@ def ensure_image(item, config, story):
         return
     orientation = 'portrait' if item.get('format', 'shorts') == 'shorts' else 'landscape'
     try:
-        path = image_picker.pick(story, config, config.get('id') or 'main', Path(item['story']).stem, orientation,
-                                 log=lambda m: print(m, flush=True))
+        path = pick_image(story, config, item, orientation)
     except image_picker.NoImage as exc:
         if item.get('background'):
             item.setdefault('variety_warnings', []).append(f'No image found, so a background clip was used: {exc}')
