@@ -99,11 +99,18 @@ def caption_text(text):
 
 def build_captions(words, layout, caption_style, title=None, title_seconds=3.0,
                    font='Arial Black', word_colour='#FFD400', phrase_colour='#FFFFFF',
-                   end_text=None, end_seconds=4.0, duration=None):
+                   end_text=None, end_seconds=4.0, duration=None, host_spans=None, host_name=None):
     """Return ASS subtitle text for the narration timings.
 
     end_text: a card for the last end_seconds (e.g. "Part 2 is on my profile").
+    host_spans: [start, end] seconds where the channel host speaks: their words get
+    their own quieter style, and host_name is shown as a card, so nobody mistakes
+    the host for the story's narrator.
     """
+    host_spans = host_spans or []
+
+    def hosting(seconds):
+        return any(a - 0.05 <= seconds <= b + 0.05 for a, b in host_spans)
     font, word_c, phrase_c = safe_font(font), ass_colour(word_colour), ass_colour(phrase_colour)
     width, height = SIZES[layout]
     merged = []
@@ -117,6 +124,9 @@ def build_captions(words, layout, caption_style, title=None, title_seconds=3.0,
     limit = (4, 30) if layout == 'vertical' else (8, 52)
     phrases, current = [], []
     for word in merged:
+        if current and hosting(word['start']) != hosting(current[-1]['start']):
+            phrases.append(current)
+            current = []
         current.append(word)
         text = ' '.join(w['word'] for w in current)
         if len(current) >= limit[0] or len(text) >= limit[1] or re.search(r'[.!?]$', word['word']):
@@ -137,6 +147,10 @@ def build_captions(words, layout, caption_style, title=None, title_seconds=3.0,
     title_size = 74 if layout == 'vertical' else 78
     title_style = (f'Style: Title,{font},{title_size},&H00FFFFFF,&H00FFFFFF,&H18161616,&H18161616,'
                    f'-1,0,0,0,100,100,0,0,3,26,0,8,90,90,0,1')
+    host_style = (f'Style: Host,{font},{56 if layout == "landscape" else 64},&H00D8D2C8,&H00D8D2C8,&H00101010,&H80000000,'
+                  f'0,-1,0,0,100,100,1,0,1,3,2,2,160,160,{80 if layout == "landscape" else 520},1')
+    card_style = (f'Style: Card,{font},{96 if layout == "landscape" else 88},&H00F0F0F0,&H00F0F0F0,&H00000000,&H00000000,'
+                  f'-1,0,0,0,100,100,14,0,1,0,6,5,60,60,0,1')
     header = f'''[Script Info]
 ScriptType: v4.00+
 PlayResX: {width}
@@ -148,6 +162,8 @@ ScaledBorderAndShadow: yes
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 {default}
 {title_style}
+{host_style}
+{card_style}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -162,60 +178,130 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         fade = r'{\fad(250,0)\pos(%d,%d)}' % (width // 2, top)
         events.append(f'Dialogue: 1,{ass_time(max(0, duration - end_seconds))},{ass_time(duration + 1)},Title,,0,0,0,,'
                       f'{fade}{caption_text(end_text)}')
+    if host_name:
+        for a, b in host_spans:
+            place = r'{\fad(700,500)\pos(%d,%d)}' % (width // 2, round(height * (0.14 if layout == 'landscape' else 0.1)))
+            events.append(f'Dialogue: 2,{ass_time(max(0, a - 0.6))},{ass_time(b + 0.5)},Card,,0,0,0,,'
+                          f'{place}{caption_text(host_name.upper())}')
     for phrase in phrases:
         start, end = phrase[0]['start'], phrase[-1]['end']
-        events.append(f"Dialogue: 0,{ass_time(start)},{ass_time(end)},Default,,0,0,0,,{position}"
-                      f"{caption_text(' '.join(w['word'] for w in phrase))}")
+        host = hosting(start)
+        events.append(f"Dialogue: 0,{ass_time(start)},{ass_time(end)},{'Host' if host else 'Default'},,0,0,0,,"
+                      f"{'' if host else position}{caption_text(' '.join(w['word'] for w in phrase))}")
     return header + '\n'.join(events) + '\n', len(phrases)
 
 
-IMAGE_FPS = {'vertical': 30, 'landscape': 24}
-PAN_SPEED = {'vertical': 14, 'landscape': 9}   # pixels per second: slow enough to feel still
-IMAGE_ZOOM = 1.12                              # head-room for the pan on images that match the frame
+IMAGE_FPS = {'vertical': 30, 'landscape': 30}
+PUSH_IN = {'vertical': 1.18, 'landscape': 1.25}  # how far the camera moves in over the whole video
 
 
 def prepare_image(image, layout, destination, rng=random):
-    """Scale the photo once to cover the frame with room to pan, and draw a vignette.
+    """Crop the photo to the frame's exact shape and size, and draw a vignette.
 
     Returns (image path, size, vignette path). Doing this here, not in FFmpeg,
-    keeps the per-frame work to a crop and an overlay (FFmpeg's own vignette
+    keeps the per-frame work to one zoom and an overlay (FFmpeg's own vignette
     filter doubled the render time).
     """
     from PIL import Image
     width, height = SIZES[layout]
     token = rng.randrange(10**8)
+    target = (width, height)
     with Image.open(image) as picture:
         picture = picture.convert('RGB')
-        scale = max(width / picture.width, height / picture.height) * IMAGE_ZOOM
-        size = (max(width, round(picture.width * scale / 2) * 2), max(height, round(picture.height * scale / 2) * 2))
+        scale = max(target[0] / picture.width, target[1] / picture.height)
+        resized = picture.resize((max(target[0], round(picture.width * scale)), max(target[1], round(picture.height * scale))),
+                                 Image.LANCZOS)
+        left, top = (resized.width - target[0]) // 2, (resized.height - target[1]) // 2
         prepared = destination / f'_bg_{token}.jpg'
-        picture.resize(size, Image.LANCZOS).save(prepared, quality=95)
+        from PIL import ImageFilter
+        resized.crop((left, top, left + target[0], top + target[1])).filter(
+            ImageFilter.UnsharpMask(radius=1.2, percent=60, threshold=2)).save(prepared, quality=95)
     # Transparent centre, edges darkened by up to ~55%.
     gradient = Image.radial_gradient('L').resize((width, height), Image.BILINEAR)
     shade = Image.new('RGBA', (width, height), (0, 0, 0, 0))
     shade.putalpha(gradient.point(lambda v: max(0, min(140, int((v - 105) * 1.1)))))
     vignette = destination / f'_vignette_{token}.png'
     shade.save(vignette)
-    return prepared, size, vignette
+    return prepared, target, vignette
 
 
-def image_pan(layout, size, rng=random):
-    """Crop expressions that drift slowly back and forth across the prepared image."""
+def image_pan(layout, size, duration=60.0, rng=random):
+    """A slow, steady push forward into the photo, as if walking toward it.
+
+    The zoom grows exponentially, so the move feels the same speed from start to
+    end, and stays centred: no sideways drift, no back-and-forth.
+    """
+    frames = max(1, round(duration * IMAGE_FPS[layout]))
+    # FFmpeg's zoompan and crop move in whole pixels, which judders on a slow move;
+    # perspective samples between pixels, so every frame moves by the same tiny step.
+    shrink = f'pow({PUSH_IN[layout]},-in/{frames})'
+    lo, hi = f'(1-{shrink})', f'(1+{shrink})'
+    corners = [('W', lo), ('H', lo), ('W', hi), ('H', lo), ('W', lo), ('H', hi), ('W', hi), ('H', hi)]
+    points = ':'.join(f"{axis}{i // 2}='{side}/2*{edge}'" for i, (side, edge) in enumerate(corners)
+                      for axis in ['xy'[i % 2]])
+    return f'perspective={points}:interpolation=linear:eval=frame,setsar=1'
+
+
+SCENE_FADE = 0.6
+
+
+def default_host_scene(layout, destination, rng=random):
+    """A closed door in a dark room, light leaking around its edges: the channel's scene when none is supplied."""
+    from PIL import Image, ImageDraw, ImageFilter
     width, height = SIZES[layout]
-    range_x, range_y = size[0] - width, size[1] - height
-    speed = PAN_SPEED[layout]
+    unit = min(width, height)
+    door_w = round(unit * (0.30 if layout == 'landscape' else 0.42))
+    door_h = round(door_w * 1.85)
+    left = (width - door_w) // 2
+    floor = round(height * (0.84 if layout == 'landscape' else 0.62))
+    top = floor - door_h
+    scene = Image.new('RGB', (width, height), (5, 6, 8))
+    # Light leaking around the frame, strongest under the door, spreading across the floor.
+    light = Image.new('L', (width, height), 0)
+    draw = ImageDraw.Draw(light)
+    draw.rectangle((left - 6, top - 6, left + door_w + 6, floor), outline=150, width=5)
+    draw.rectangle((left, floor - 10, left + door_w, floor), fill=255)
+    sharp = light.filter(ImageFilter.GaussianBlur(1.5))
+    spill = Image.new('L', (width, height), 0)
+    ImageDraw.Draw(spill).ellipse((left - door_w * 0.5, floor - unit * 0.01, left + door_w * 1.5, floor + unit * 0.12), fill=70)
+    spill.paste(light, (0, 0), light)
+    halo = spill.filter(ImageFilter.GaussianBlur(unit * 0.045))
+    combined = Image.eval(Image.blend(halo, sharp, 0.35), lambda v: min(255, int(v * 1.5)))
+    scene = Image.composite(Image.new('RGB', (width, height), (255, 196, 120)), scene, combined)
+    # The door itself, a shade lighter than the wall so its shape reads in the dark.
+    door = ImageDraw.Draw(scene)
+    door.rectangle((left, top, left + door_w, floor - 10), fill=(13, 13, 15))
+    knob = (left + door_w * 0.84, top + door_h * 0.55)
+    door.ellipse((knob[0] - 7, knob[1] - 7, knob[0] + 7, knob[1] + 7), fill=(60, 52, 40))
+    path = destination / f'_scene_{rng.randrange(10**8)}.jpg'
+    scene.save(path, quality=95)
+    return path
 
-    def drift(span, rate, phase):
-        if span <= 1:
-            return '0'
-        # Triangle wave: glide from one edge to the other and back, at a constant speed.
-        return f"'{span}*abs(mod(t*{rate}/{span}+{phase:.3f},2)-1)'"
-    return (f'crop={width}:{height}:x={drift(range_x, speed, rng.uniform(0, 2))}'
-            f':y={drift(range_y, speed / 2, rng.uniform(0, 2))},setsar=1')
+
+def host_scene_graph(index, layout, spans, is_video):
+    """Filters that turn input `index` into one faded, flickering stream per host span,
+    overlaid on [story] only while the host speaks. Returns (graph, output label)."""
+    width, height = SIZES[layout]
+    cover = f'scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},setsar=1'
+    source = f'fps=30,{cover}' if is_video else \
+        f'format=yuv420p,loop=loop=-1:size=1:start=0,setpts=N/30/TB,{cover}'
+    # A light that is not quite steady, and film grain, so the scene feels alive.
+    flicker = "eq=brightness='-0.07*gt(sin(t*13)*sin(t*7.7)*sin(t*2.3)\\,0.45)':eval=frame,noise=alls=9:allf=t"
+    labels = [f's{n}' for n in range(len(spans))]
+    graph = f';[{index}:v]{source},{flicker},format=yuv420p' + (f',split={len(spans)}' if len(spans) > 1 else '') + \
+        ''.join(f'[{label}]' for label in labels)
+    current = 'story'
+    for n, (label, (a, b)) in enumerate(zip(labels, spans)):
+        start, end = max(0.0, a - SCENE_FADE), b + SCENE_FADE
+        graph += (f';[{label}]fade=t=in:st={start:.3f}:d={SCENE_FADE},fade=t=out:st={end - SCENE_FADE:.3f}:d={SCENE_FADE}[f{n}]'
+                  f";[{current}][f{n}]overlay=0:0:enable='between(t,{start:.3f},{end:.3f})'[h{n}]")
+        current = f'h{n}'
+    return graph, current
 
 
 def video_filter(layout, background_size, captions_name, duration, progress_bar, grade='none', image_pan_filter=None,
-                 vignette_input=None):
+                 vignette_input=None, scene=None):
+    """scene: (input index, host spans, is video) to cut to the channel's scene while the host speaks."""
     width, height = SIZES[layout]
     cover = f'scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},setsar=1'
     portrait_source = background_size and background_size[1] > background_size[0]
@@ -237,6 +323,9 @@ def video_filter(layout, background_size, captions_name, duration, progress_bar,
                  f'[b]scale=-2:{height},setsar=1[front];[back][front]overlay=(W-w)/2:0')
     else:
         graph = f'[0:v]fps=30,{cover}'
+    if scene and scene[1]:
+        extra, label = host_scene_graph(scene[0], layout, scene[1], scene[2])
+        graph += '[story]' + extra + f';[{label}]null'
     if GRADE_FILTERS.get(grade):
         graph += ',' + GRADE_FILTERS[grade]
     graph += f',ass={captions_name}'
@@ -350,6 +439,8 @@ def main():
     parser.add_argument('--end-text', help='Text shown in a box during the last seconds (e.g. "Part 2 on my profile")')
     parser.add_argument('--end-seconds', type=float, default=4.0)
     parser.add_argument('--progress-bar', action='store_true')
+    parser.add_argument('--host-scene', type=Path, help="Image or video shown while the channel host speaks")
+    parser.add_argument('--host-name', help="Channel name shown while the host speaks")
     parser.add_argument('--music', type=Path, help='Folder of music tracks; one is picked at random')
     parser.add_argument('--music-volume', type=float, default=0.12)
     parser.add_argument('--font', default='Arial Black')
@@ -363,12 +454,14 @@ def main():
     destination = args.destination.resolve()
     destination.mkdir(parents=True, exist_ok=True)
     words = json.loads((narration / 'timings.json').read_text(encoding='utf-8'))
-    duration = json.loads((narration / 'metadata.json').read_text(encoding='utf-8'))['duration_seconds']
+    narration_meta = json.loads((narration / 'metadata.json').read_text(encoding='utf-8'))
+    duration = narration_meta['duration_seconds']
+    host_spans = [span for span in narration_meta.get('host_spans') or [] if span[1] > span[0]]
     background = args.background.resolve()
 
     ass, phrase_count = build_captions(words, args.format, args.caption_style, args.title_card, args.title_seconds,
                                        args.font, args.word_color, args.phrase_color,
-                                       args.end_text, args.end_seconds, duration)
+                                       args.end_text, args.end_seconds, duration, host_spans, args.host_name)
     suffix = '_yellow_words' if args.caption_style == 'words' and args.format == 'vertical' else ''
     output = destination / (args.filename or f'{args.name}{suffix}.mp4')
     # A plain file name: commas, quotes or brackets would break FFmpeg's filter syntax.
@@ -396,9 +489,17 @@ def main():
     if vignette:
         vignette_input = 3 if track else 2
         inputs += ['-framerate', str(IMAGE_FPS[args.format]), '-i', str(vignette)]
+    scene = scene_file = None
+    if host_spans:
+        scene_file = args.host_scene.resolve() if args.host_scene and args.host_scene.is_file() else \
+            default_host_scene(args.format, destination)
+        is_video = scene_file.suffix.lower() in ('.mp4', '.mov', '.webm', '.mkv', '.m4v')
+        scene = (inputs.count('-i'), host_spans, is_video)
+        inputs += (['-stream_loop', '-1', '-i', str(scene_file)] if is_video
+                   else ['-framerate', '30', '-i', str(scene_file)])
     graph = video_filter(args.format, None if prepared else video_size(background), captions.name, duration,
-                         args.progress_bar, args.grade, image_pan(args.format, image_size) if prepared else None,
-                         vignette_input)
+                         args.progress_bar, args.grade, image_pan(args.format, image_size, duration) if prepared else None,
+                         vignette_input, scene)
     video_graph = graph
 
     def command(chosen, character):
@@ -449,7 +550,7 @@ def main():
             partial.unlink(missing_ok=True)
             raise SystemExit(f'Rendering failed: {error.strip().splitlines()[-1][:300]}')
     finally:
-        for temporary in (prepared, vignette):
+        for temporary in (prepared, vignette, scene_file if scene_file and scene_file.name.startswith('_scene_') else None):
             if temporary:
                 temporary.unlink(missing_ok=True)
     os.replace(partial, output)

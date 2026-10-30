@@ -57,7 +57,7 @@ CHANNEL_DEFAULTS = {
     'voice_engine': 'kokoro', 'voice_clip': '', 'voice_clip_male': None, 'voice_clip_female': None,
     'chatterbox_model': 'standard', 'expressiveness': 0.5,
     # The narrator persona: one character for voice, words and delivery (see persona.py).
-    'persona': None,
+    'persona': None, 'host_voice_clip': '',
     # Signature sound applied to the narration: natural, deep, uncanny, tape or room.
     'voice_character': 'natural',
     # Picture behind the narration: 'clips' (background videos) or 'image' (one

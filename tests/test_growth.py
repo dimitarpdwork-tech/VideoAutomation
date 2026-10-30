@@ -233,7 +233,7 @@ class GeneratorTests(unittest.TestCase):
         for p in self.patches:
             p.start()
         channels.create_channel('main', 'Main')
-        self.source_text = ('My neighbour started digging a trench around his house in July. By August it was full of '
+        self.source_text = ('My name is Rosa. My neighbour started digging a trench around his house in July. By August it was full of '
                             'water and he had bought a small rowing boat. ' * 4)
         channels.write_json(self.root / 'stories/abc.json', {'id': 'abc', 'title': 'My neighbour built a moat around his house',
                                                              'text': self.source_text, 'text_source': 'post_page', 'score': 9000})
@@ -248,7 +248,7 @@ class GeneratorTests(unittest.TestCase):
         return SimpleNamespace(content=[SimpleNamespace(type='text', text=f'<json>{payload}</json>')])
 
     def test_copy_is_rejected_and_original_is_saved(self):
-        original = ' '.join(f'The bakery on Linden Street had a new rule number {i} every single morning without fail.' for i in range(12))
+        original = 'My name is Rosa. I bake bread for a living. ' + ' '.join(f'The bakery on Linden Street had a new rule number {i} every single morning without fail.' for i in range(12))
         client = MagicMock()
         client.messages.create.side_effect = [self.reply('A moat for my neighbour', self.source_text),
                                               self.reply('The bakery that changed its rules daily', original)]

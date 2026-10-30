@@ -479,7 +479,7 @@ export async function saveSettings(id, values) {
   for (const [key, label] of [['caption_color', 'Word caption colour'], ['phrase_color', 'Phrase caption colour']]) if (!HEX.test(v[key] || '')) fail(`${label}: a colour like #FFD400.`);
   if (!grades.includes(v.color_grade)) fail('Choose a colour grade.');
   if (!['kokoro', 'chatterbox'].includes(v.voice_engine)) fail('Choose a narration engine.');
-  for (const key of ['voice_clip', 'voice_clip_male', 'voice_clip_female']) if (v[key] && !CLIP_FILE.test(v[key])) fail('Narrator clip: choose a file from the voices folder.');
+  for (const key of ['voice_clip', 'voice_clip_male', 'voice_clip_female', 'host_voice_clip']) if (v[key] && !CLIP_FILE.test(v[key])) fail('Narrator clip: choose a file from the voices folder.');
   if (!['standard', 'turbo'].includes(v.chatterbox_model)) fail('Choose a Chatterbox model.');
   const characters = (await schema()).voice_characters ?? ['natural'];
   const p = v.persona;
@@ -505,7 +505,7 @@ export async function saveSettings(id, values) {
     ...v, hashtags: v.hashtags.map(t => (t.startsWith('#') ? t : '#' + t)), category_id: String(v.category_id),
     teaser_ctas: v.teaser_ctas.map(t => t.trim()).filter(Boolean), voice_male: v.voice_male || null, voice_female: v.voice_female || null,
     story_category: String(v.story_category || 'General stories').slice(0, 100),
-    voice_clip: v.voice_clip || '', voice_clip_male: v.voice_clip_male || null, voice_clip_female: v.voice_clip_female || null,
+    voice_clip: v.voice_clip || '', host_voice_clip: v.host_voice_clip || '', voice_clip_male: v.voice_clip_male || null, voice_clip_female: v.voice_clip_female || null,
     image_keywords: v.image_keywords.map(k => k.trim()).filter(Boolean),
     tiktok_hashtags: v.tiktok_hashtags.map(t => (t.startsWith('#') ? t : '#' + t)),
     voice_character: v.voice_character ?? 'natural',
@@ -519,7 +519,7 @@ export async function saveSettings(id, values) {
     'full_description_template', 'fiction_note', 'clean_language', 'title_card', 'title_card_seconds', 'progress_bar', 'music_volume',
     'generator_model', 'story_category', 'require_review', 'max_uploads_per_day', 'caption_font', 'caption_color', 'phrase_color', 'color_grade',
     'voice_engine', 'voice_clip', 'voice_clip_male', 'voice_clip_female', 'chatterbox_model', 'expressiveness', 'background_mode',
-    'image_keywords', 'collected_stories', 'long_target_words', 'tiktok_part_seconds', 'tiktok_hashtags', 'voice_character', 'persona'];
+    'image_keywords', 'collected_stories', 'long_target_words', 'tiktok_part_seconds', 'tiktok_hashtags', 'voice_character', 'persona', 'host_voice_clip'];
   await config(id);
   // Merge into the file as it is now: a sign-in finishing meanwhile keeps its channel binding.
   await withJsonLock(path.join(root, 'channels', id, 'config.json'), current => {
@@ -722,7 +722,7 @@ export async function characterPreviews(id, sample) {
 // Open a project folder in Explorer / Finder. Only these fixed folders can be opened.
 export async function openFolder(id, which) {
   await config(id);
-  const folders = {voices: VOICES_DIR, samples: SAMPLES_DIR, videos: path.join(base(id), 'videos'), stories: path.join(base(id), 'stories')};
+  const folders = {voices: VOICES_DIR, samples: SAMPLES_DIR, videos: path.join(base(id), 'videos'), stories: path.join(base(id), 'stories'), channel: path.join(root, 'channels', id)};
   const folder = folders[which];
   if (!folder) throw Error('Unknown folder.');
   await fs.mkdir(folder, {recursive: true});
