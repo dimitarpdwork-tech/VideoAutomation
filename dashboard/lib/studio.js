@@ -630,6 +630,21 @@ export async function savePexelsKey(key, confirmRemove) {
   return {saved: true};
 }
 
+// Open a project folder in Explorer / Finder. Only these fixed folders can be opened.
+export async function openFolder(id, which) {
+  await config(id);
+  const folders = {voices: VOICES_DIR, samples: SAMPLES_DIR, videos: path.join(base(id), 'videos'), stories: path.join(base(id), 'stories')};
+  const folder = folders[which];
+  if (!folder) throw Error('Unknown folder.');
+  await fs.mkdir(folder, {recursive: true});
+  const [command, args] = process.platform === 'win32' ? ['explorer.exe', [folder]]
+    : process.platform === 'darwin' ? ['open', [folder]] : ['xdg-open', [folder]];
+  const child = spawn(command, args, {detached: true, stdio: 'ignore', windowsHide: false});
+  child.on('error', () => {});
+  child.unref();
+  return {opened: true};
+}
+
 export async function markRelatedDone(id, teaserId) {
   await config(id);
   let found = false;

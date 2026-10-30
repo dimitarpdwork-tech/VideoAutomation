@@ -15,26 +15,40 @@ const splitList = (text, pattern) => text.split(pattern).map(t => t.trim()).filt
 const sampleUrl = file => '/api/voice-sample?file=' + encodeURIComponent(file);
 const tiktokUrl = (channel, batch, file) => `/api/media?channel=${encodeURIComponent(channel)}&batch=${encodeURIComponent(batch)}&file=${encodeURIComponent(file)}`;
 
-function VoiceSamples({data, form, setForm, busy, action}) {
+function OpenFolder({which, label, action, busy}) {
+  return <button type="button" className="folder" disabled={busy} onClick={() => action({action: 'open-folder', which})}>📂 {label}</button>;
+}
+
+// Lives on the main page, so voices can be compared and chosen without opening Settings.
+function VoiceSamples({data, busy, action}) {
   const samples = data?.voiceSamples ?? [];
-  const using = s => s.engine === 'chatterbox' ? form.voice_engine === 'chatterbox' && (form.voice_clip || '') === (s.clip || '')
-    : form.voice_engine === 'kokoro' && form.voice === s.voice;
-  return <fieldset className="voice-samples"><legend>Hear the narrators</legend>
-    <p className="wide">Every narrator reads the same short horror passage. Pick by ear, then save settings.
-      {!data?.voiceInstalled && ' Chatterbox (the human-sounding voice) is not installed yet: run setup_voice, then make the samples again.'}</p>
-    <div className="wide sample-actions">
-      <button type="button" disabled={busy || data?.voices?.running} onClick={() => action({action: 'voice-samples'})}>
-        {data?.voices?.running ? 'Making samples…' : samples.length ? 'Make samples again' : 'Make voice samples'}</button>
-      <small>Your own clips: put 10–30 seconds of clean speech you have the rights to (WAV or MP3) in the <code>voices</code> folder.</small>
-    </div>
-    {samples.length > 0 && <ul className="sample-list wide">{samples.map(s => <li key={s.file} className={using(s) ? 'chosen' : ''}>
+  const c = data?.channel;
+  if (!c) return null;
+  const using = s => s.engine === 'chatterbox' ? c.voice_engine === 'chatterbox' && (c.voice_clip || '') === (s.clip || '')
+    : c.voice_engine === 'kokoro' && c.voice === s.voice;
+  const choose = s => action({action: 'settings', settings: s.engine === 'chatterbox'
+    ? {...c, voice_engine: 'chatterbox', voice_clip: s.clip || ''} : {...c, voice_engine: 'kokoro', voice: s.voice}});
+  const current = c.voice_engine === 'chatterbox'
+    ? 'Chatterbox · ' + (c.voice_clip ? c.voice_clip.replace(/\.[a-z0-9]+$/i, '').replace(/_/g, ' ') : 'built-in voice')
+    : 'Kokoro · ' + c.voice;
+  return <section className="voice-panel">
+    <div className="voice-head"><div><strong>Narrator</strong> <span className="current-voice">{current}</span>
+      <p>Every sample reads the same short horror passage. Press play, then <b>Use this voice</b>: it is saved for this channel straight away.
+        {!data.voiceInstalled && ' Chatterbox (the human-sounding voice) is not installed yet: run setup_voice, then make the samples again.'}</p></div>
+      <div className="sample-actions">
+        <button type="button" disabled={busy || data.voices?.running} onClick={() => action({action: 'voice-samples'})}>
+          {data.voices?.running ? 'Making samples…' : samples.length ? 'Make samples again' : 'Make voice samples'}</button>
+        <OpenFolder which="voices" label="Narrator clips" action={action} busy={busy}/>
+        <OpenFolder which="samples" label="Samples" action={action} busy={busy}/>
+      </div></div>
+    {samples.length > 0 && <ul className="sample-list">{samples.map(s => <li key={s.file} className={using(s) ? 'chosen' : ''}>
       <div><strong>{s.label}</strong><small>{s.description}</small></div>
       <audio controls preload="none" src={sampleUrl(s.file)}/>
-      <button type="button" disabled={using(s)} onClick={() => setForm(s.engine === 'chatterbox'
-        ? {...form, voice_engine: 'chatterbox', voice_clip: s.clip || ''} : {...form, voice_engine: 'kokoro', voice: s.voice})}>
-        {using(s) ? 'Selected' : 'Use this voice'}</button></li>)}</ul>}
-    <Log title="Voice samples" job={data?.voices}/>
-  </fieldset>;
+      <button type="button" disabled={busy || using(s)} onClick={() => choose(s)}>{using(s) ? '✓ Selected' : 'Use this voice'}</button></li>)}</ul>}
+    {!samples.length && !data.voices?.running && <small>No samples yet: click “Make voice samples” (3–6 minutes the first time).</small>}
+    <small>Your own clips: 10–30 seconds of clean speech you have the rights to (WAV or MP3) in the Narrator clips folder, then make the samples again.</small>
+    <Log title="Voice samples" job={data.voices}/>
+  </section>;
 }
 
 function Log({title, job}) {
@@ -78,6 +92,7 @@ export default function ChannelControls({data, channel, onChannel, onRefresh}) {
         setMessage(result.fits ? `Story added (${result.words} words).`
           : `Story added (${result.words} words), but this channel only uses stories of ${result.low}–${result.high} words.`);
       } else if (body.action === 'api-key') { setApiKey(''); setMessage(result.removed ? 'API key removed.' : 'API key saved on this computer.'); }
+      else if (body.action === 'open-folder') setMessage(result.opened ? '' : 'Could not open the folder.');
       else if (body.action === 'pexels-key') { setPexelsKey(''); setMessage(result.removed ? 'Pexels key removed.' : 'Pexels key saved on this computer.'); }
       await onRefresh();
     } catch (error) { setMessage(error.message); } finally { setBusy(false); }
@@ -184,7 +199,6 @@ export default function ChannelControls({data, channel, onChannel, onRefresh}) {
         <label>Caption colour<input type="color" value={form.caption_style === 'words' ? form.caption_color : form.phrase_color}
           onChange={e => set(form.caption_style === 'words' ? 'caption_color' : 'phrase_color', e.target.value.toUpperCase())}/></label>
       </fieldset>
-      <VoiceSamples data={data} form={form} setForm={setForm} busy={busy} action={action}/>
       <button type="button" className="link" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}>{advanced ? 'Hide advanced settings' : 'Show advanced settings'}</button>
       {advanced && <>
         <fieldset><legend>Descriptions and calls to action</legend>
@@ -245,6 +259,8 @@ export default function ChannelControls({data, channel, onChannel, onRefresh}) {
       <button disabled={busy}>{pexelsKey ? 'Save key' : data?.hasPexelsKey ? 'Remove key' : 'Save key'}</button>
     </form>}
 
+    <VoiceSamples data={data} busy={busy} action={action}/>
+
     <div className="production-row"><div><strong>Generate stories</strong>
       <p>{data?.conceptSources ? `Rewrites the concept of your ${data.conceptSources} most-upvoted collected stories as new, original stories first; then writes from your best themes.`
         : 'New fictional stories on the themes that perform best on your channel.'} Each opens with a hook and is checked against your library so it is original.
@@ -266,6 +282,7 @@ export default function ChannelControls({data, channel, onChannel, onRefresh}) {
       <Reason>{noBackgrounds || noVoice}</Reason></div>
       <input aria-label="Number of stories for autopilot" type="number" min="1" max="30" value={autoCount} onChange={e => setAutoCount(Number(e.target.value))}/>
       <button className="primary" disabled={busy || jobRunning || !!noBackgrounds || !!noVoice} onClick={() => action({action: 'autopilot', count: autoCount})}>{data?.production.running ? 'Running…' : 'Run autopilot'}</button></div>
+    <div className="folder-row"><OpenFolder which="videos" label="Open this channel's videos folder" action={action} busy={busy}/></div>
     <Log title="Production" job={data?.production}/>
     {data?.failed?.length > 0 && <details className="failed-list"><summary>{data.failed.length} story(ies) could not be made</summary>
       <ul>{data.failed.map(f => <li key={f.batch + f.name}><strong>{f.title || f.name}</strong>: {f.status === 'skipped' ? 'set aside to edit' : 'failed'}. {f.reason}</li>)}</ul></details>}
