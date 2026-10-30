@@ -1,6 +1,8 @@
-"""Render a narration over a background clip with automatic captions.
+"""Render a narration over a background clip or a still image, with automatic captions.
 
 Vertical (1080x1920) for Shorts or landscape (1920x1080) for full videos.
+With --image, one photo is slowly panned (a "Ken Burns" move) under a soft
+vignette: the classic look of narrated horror and sleep channels.
 Optional extras: a hook title card for the first seconds, a progress bar, and
 background music that automatically ducks under the narration.
 """
@@ -59,12 +61,22 @@ def pick_music(folder, rng=random):
     return rng.choice(tracks) if tracks else None
 
 
+def _grade(contrast=1.0, lift=0, saturation=1.0, blue=0, red=0):
+    """One lookup table in YUV: contrast, saturation and a colour tint.
+
+    About 4x faster than FFmpeg's colorbalance, which converts every frame to RGB and back.
+    """
+    def chroma(shift):
+        return f"'clip((val-128)*{saturation}+128{shift:+d},0,255)'"
+    return f"lutyuv=y='clip((val-128)*{contrast}+128{lift:+d},0,255)':u={chroma(blue)}:v={chroma(red)}"
+
+
 GRADE_FILTERS = {
     'none': '',
-    'cold': 'colorbalance=rs=-0.04:bs=0.08:bm=0.04,eq=saturation=0.85:contrast=1.05',
-    'warm': 'colorbalance=rs=0.06:rm=0.03:bs=-0.05,eq=saturation=0.95',
-    'faded': 'eq=contrast=0.9:saturation=0.8:brightness=0.03',
-    'noir': 'hue=s=0,eq=contrast=1.2',
+    'cold': _grade(contrast=1.05, saturation=0.85, blue=7, red=-5),
+    'warm': _grade(saturation=0.95, blue=-6, red=6),
+    'faded': _grade(contrast=0.9, lift=8, saturation=0.8),
+    'noir': _grade(contrast=1.2, saturation=0),
 }
 
 
@@ -86,8 +98,12 @@ def caption_text(text):
 
 
 def build_captions(words, layout, caption_style, title=None, title_seconds=3.0,
-                   font='Arial Black', word_colour='#FFD400', phrase_colour='#FFFFFF'):
-    """Return ASS subtitle text for the narration timings."""
+                   font='Arial Black', word_colour='#FFD400', phrase_colour='#FFFFFF',
+                   end_text=None, end_seconds=4.0, duration=None):
+    """Return ASS subtitle text for the narration timings.
+
+    end_text: a card for the last end_seconds (e.g. "Part 2 is on my profile").
+    """
     font, word_c, phrase_c = safe_font(font), ass_colour(word_colour), ass_colour(phrase_colour)
     width, height = SIZES[layout]
     merged = []
@@ -141,6 +157,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         top = 330 if layout == 'vertical' else 150
         fade = r'{\fad(150,250)\pos(%d,%d)}' % (width // 2, top)
         events.append(f'Dialogue: 1,{ass_time(0)},{ass_time(title_seconds)},Title,,0,0,0,,{fade}{caption_text(title)}')
+    if end_text and duration and end_seconds > 0:
+        top = 330 if layout == 'vertical' else 150
+        fade = r'{\fad(250,0)\pos(%d,%d)}' % (width // 2, top)
+        events.append(f'Dialogue: 1,{ass_time(max(0, duration - end_seconds))},{ass_time(duration + 1)},Title,,0,0,0,,'
+                      f'{fade}{caption_text(end_text)}')
     for phrase in phrases:
         start, end = phrase[0]['start'], phrase[-1]['end']
         events.append(f"Dialogue: 0,{ass_time(start)},{ass_time(end)},Default,,0,0,0,,{position}"
@@ -148,12 +169,66 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return header + '\n'.join(events) + '\n', len(phrases)
 
 
-def video_filter(layout, background_size, captions_name, duration, progress_bar, grade='none'):
+IMAGE_FPS = {'vertical': 30, 'landscape': 24}
+PAN_SPEED = {'vertical': 14, 'landscape': 9}   # pixels per second: slow enough to feel still
+IMAGE_ZOOM = 1.12                              # head-room for the pan on images that match the frame
+
+
+def prepare_image(image, layout, destination, rng=random):
+    """Scale the photo once to cover the frame with room to pan, and draw a vignette.
+
+    Returns (image path, size, vignette path). Doing this here, not in FFmpeg,
+    keeps the per-frame work to a crop and an overlay (FFmpeg's own vignette
+    filter doubled the render time).
+    """
+    from PIL import Image
+    width, height = SIZES[layout]
+    token = rng.randrange(10**8)
+    with Image.open(image) as picture:
+        picture = picture.convert('RGB')
+        scale = max(width / picture.width, height / picture.height) * IMAGE_ZOOM
+        size = (max(width, round(picture.width * scale / 2) * 2), max(height, round(picture.height * scale / 2) * 2))
+        prepared = destination / f'_bg_{token}.jpg'
+        picture.resize(size, Image.LANCZOS).save(prepared, quality=95)
+    # Transparent centre, edges darkened by up to ~55%.
+    gradient = Image.radial_gradient('L').resize((width, height), Image.BILINEAR)
+    shade = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+    shade.putalpha(gradient.point(lambda v: max(0, min(140, int((v - 105) * 1.1)))))
+    vignette = destination / f'_vignette_{token}.png'
+    shade.save(vignette)
+    return prepared, size, vignette
+
+
+def image_pan(layout, size, rng=random):
+    """Crop expressions that drift slowly back and forth across the prepared image."""
+    width, height = SIZES[layout]
+    range_x, range_y = size[0] - width, size[1] - height
+    speed = PAN_SPEED[layout]
+
+    def drift(span, rate, phase):
+        if span <= 1:
+            return '0'
+        # Triangle wave: glide from one edge to the other and back, at a constant speed.
+        return f"'{span}*abs(mod(t*{rate}/{span}+{phase:.3f},2)-1)'"
+    return (f'crop={width}:{height}:x={drift(range_x, speed, rng.uniform(0, 2))}'
+            f':y={drift(range_y, speed / 2, rng.uniform(0, 2))},setsar=1')
+
+
+def video_filter(layout, background_size, captions_name, duration, progress_bar, grade='none', image_pan_filter=None,
+                 vignette_input=None):
     width, height = SIZES[layout]
     cover = f'scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},setsar=1'
     portrait_source = background_size and background_size[1] > background_size[0]
     # Drop to 30 fps first so every later filter handles half the frames of a 60 fps source.
-    if layout == 'landscape' and portrait_source:
+    if image_pan_filter:
+        # One decoded frame, repeated (decoding the photo for every frame was the slow part).
+        fps = IMAGE_FPS[layout]
+        still = f'format=yuv420p,loop=loop=-1:size=1:start=0,setpts=N/{fps}/TB'
+        graph = f'[0:v]{still},{image_pan_filter}'
+        if vignette_input is not None:
+            graph += (f'[pan];[{vignette_input}:v]format=yuva420p,loop=loop=-1:size=1:start=0,setpts=N/{fps}/TB[shade];'
+                      '[pan][shade]overlay=0:0')
+    elif layout == 'landscape' and portrait_source:
         # Vertical clip in a horizontal frame: a blurred fill behind the sharp clip.
         # Blurring a small copy and scaling it up looks the same and is ~7x faster.
         graph = ('[0:v]fps=30,split[a][b];'
@@ -223,6 +298,7 @@ def main():
     parser.add_argument('--caption-style', choices=['phrases', 'words'], default='phrases')
     parser.add_argument('--narration', type=Path, required=True, help='Folder written by narrate.py')
     parser.add_argument('--background', type=Path, default=ROOT / 'backgrounds/background_000.mp4')
+    parser.add_argument('--image', type=Path, help='A still image to pan instead of a background clip')
     parser.add_argument('--destination', type=Path, default=ROOT / 'videos' / 'manual')
     parser.add_argument('--name', default='story_short')
     parser.add_argument('--filename', help='Exact output file name (overrides --name and style suffix)')
@@ -230,6 +306,8 @@ def main():
     parser.add_argument('--start', type=float, help='Background start time in seconds (default: random)')
     parser.add_argument('--title-card', help='Text shown in a box during the first seconds (the hook)')
     parser.add_argument('--title-seconds', type=float, default=3.0)
+    parser.add_argument('--end-text', help='Text shown in a box during the last seconds (e.g. "Part 2 on my profile")')
+    parser.add_argument('--end-seconds', type=float, default=4.0)
     parser.add_argument('--progress-bar', action='store_true')
     parser.add_argument('--music', type=Path, help='Folder of music tracks; one is picked at random')
     parser.add_argument('--music-volume', type=float, default=0.12)
@@ -247,22 +325,38 @@ def main():
     background = args.background.resolve()
 
     ass, phrase_count = build_captions(words, args.format, args.caption_style, args.title_card, args.title_seconds,
-                                       args.font, args.word_color, args.phrase_color)
+                                       args.font, args.word_color, args.phrase_color,
+                                       args.end_text, args.end_seconds, duration)
     suffix = '_yellow_words' if args.caption_style == 'words' and args.format == 'vertical' else ''
     output = destination / (args.filename or f'{args.name}{suffix}.mp4')
     # A plain file name: commas, quotes or brackets would break FFmpeg's filter syntax.
     captions = destination / (re.sub(r'[^A-Za-z0-9_-]', '_', output.stem) + '_captions.ass')
     captions.write_text(ass, encoding='utf-8')
-    start = args.start if args.start is not None else background_offset(background, duration)
+    prepared = vignette = None
+    if args.image:
+        prepared, image_size, vignette = prepare_image(args.image.resolve(), args.format, destination)
+        start = 0.0
+    else:
+        start = args.start if args.start is not None else background_offset(background, duration)
     track = pick_music(args.music.resolve() if args.music else None) if args.music_volume > 0 else None
     encoder = pick_encoder(args.encoder)
     partial = output.with_name(output.name + '.partial')
 
-    inputs = ['-stream_loop', '-1', '-ss', f'{start:.2f}', '-i', str(background),
-              '-i', str(narration / 'narration.wav')]
+    if prepared:
+        inputs = ['-framerate', str(IMAGE_FPS[args.format]), '-i', str(prepared),
+                  '-i', str(narration / 'narration.wav')]
+    else:
+        inputs = ['-stream_loop', '-1', '-ss', f'{start:.2f}', '-i', str(background),
+                  '-i', str(narration / 'narration.wav')]
     if track:
         inputs += ['-stream_loop', '-1', '-ss', f'{background_offset(track, duration):.2f}', '-i', str(track)]
-    graph = video_filter(args.format, video_size(background), captions.name, duration, args.progress_bar, args.grade)
+    vignette_input = None
+    if vignette:
+        vignette_input = 3 if track else 2
+        inputs += ['-framerate', str(IMAGE_FPS[args.format]), '-i', str(vignette)]
+    graph = video_filter(args.format, None if prepared else video_size(background), captions.name, duration,
+                         args.progress_bar, args.grade, image_pan(args.format, image_size) if prepared else None,
+                         vignette_input)
     graph += ';' + audio_filter(args.music_volume, bool(track))
 
     def command(chosen):
@@ -274,24 +368,29 @@ def main():
 
     # Render under a temporary name; a crash never leaves a file that looks finished.
     try:
-        subprocess.run(command(encoder), cwd=destination, check=True)
-    except subprocess.CalledProcessError:
-        if encoder == 'libx264':
-            partial.unlink(missing_ok=True)
-            raise
-        print(f'{encoder} failed; retrying with the CPU encoder.', flush=True)
-        encoder = 'libx264'
         try:
             subprocess.run(command(encoder), cwd=destination, check=True)
         except subprocess.CalledProcessError:
-            partial.unlink(missing_ok=True)
-            raise
+            if encoder == 'libx264':
+                partial.unlink(missing_ok=True)
+                raise
+            print(f'{encoder} failed; retrying with the CPU encoder.', flush=True)
+            encoder = 'libx264'
+            try:
+                subprocess.run(command(encoder), cwd=destination, check=True)
+            except subprocess.CalledProcessError:
+                partial.unlink(missing_ok=True)
+                raise
+    finally:
+        for temporary in (prepared, vignette):
+            if temporary:
+                temporary.unlink(missing_ok=True)
     os.replace(partial, output)
-    extras = ', '.join(filter(None, [args.format, encoder, f'music {track.name}' if track else '',
+    extras = ', '.join(filter(None, [args.format, encoder, f'image {args.image.name}' if args.image else '', f'music {track.name}' if track else '',
                                      'title card' if args.title_card else '',
                                      'progress bar' if args.progress_bar else '']))
     print(f'Saved {output}; {phrase_count} caption phrases; {duration:.3f} seconds; '
-          f'background from {start:.1f}s; {extras}', flush=True)
+          + ('' if prepared else f'background from {start:.1f}s; ') + extras, flush=True)
 
 
 if __name__ == '__main__':

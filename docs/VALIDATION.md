@@ -128,3 +128,34 @@ Windows launcher does not resolve through `py -3.12`.
 
 This validation supports the local setup and video-production flow on the tested
 machine. It does not guarantee that every external service or environment works.
+
+## Voices, story pipeline and TikTok (October 2026)
+
+Checked in a Linux cloud machine without a graphics card or access to Hugging
+Face, Pexels, Openverse or Reddit:
+
+- **Chatterbox narrator:** ran `chatterbox_narrator.py` against the real
+  `chatterbox-tts` 0.1.7 library with a reduced, randomly initialised model
+  (the real weights could not be downloaded): built-in voice, a cloned clip,
+  delivery cues, speed change, word timings through the real MMS_FA tokenizer
+  and aligner, and the estimated-timings fallback. Audio content was noise, so
+  voice quality was **not** judged.
+- **Voice setup:** installed the exact dependency set `setup_voice.py` uses into
+  a fresh Python 3.12 environment and imported the standard and turbo models,
+  the watermarker and the aligner. This found a real bug: new environments lack
+  `setuptools`, without which Chatterbox fails to load; setup now installs it.
+- **End to end:** produced a full video + teaser for a horror story with a photo
+  background (narration replaced by a tone with even timings), approved it,
+  exported it for TikTok (two parts of 66 s and 71 s) and inspected frames:
+  title card, captions, vignette, pan, end card, progress bar and thumbnail.
+- **Speed:** photo backgrounds originally rendered at 0.6x real time; decoding
+  the photo once, a precomputed vignette and lookup-table colour grades brought
+  it to about 2.6x real time on two processor cores (the colour grades also
+  speed up clip backgrounds).
+- **Dashboard:** production build, voice-sample playback, TikTok file download,
+  path-traversal rejection, and choosing and saving a voice from the samples.
+- 98 automated tests, including fakes for the Claude API, image searches,
+  YouTube Analytics and the voice worker.
+
+Not validated live: real Chatterbox voice quality and speed on an NVIDIA card,
+real image searches, real Claude story writing, and YouTube Analytics retention.

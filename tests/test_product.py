@@ -145,7 +145,17 @@ class ProductionTests(unittest.TestCase):
             produce_batch.main()
         return json.loads((channels.paths('main')['videos'] / 'b1/batch.json').read_text())
 
+    def test_collected_stories_are_concepts_unless_narration_is_allowed(self):
+        self.add('bbb', 40, text_source='post_page', url='https://www.reddit.com/r/stories/comments/bbb/x/')
+        config = channels.load_channel('main')
+        path = self.stories / 'bbb.json'
+        story = channels.read_json(path)
+        self.assertIsNone(produce_batch.eligible_story(path, story, config))   # default: rewrite only
+        self.assertEqual(produce_batch.eligible_story(path, story, {**config, 'collected_stories': 'narrate'}), 42)
+
     def test_problem_story_is_set_aside_and_batch_continues(self):
+        config = channels.load_channel('main')
+        channels.write_json(channels.CHANNELS / 'main/config.json', {**config, 'collected_stories': 'narrate'})
         self.add('aaa', 30, text_source='original')
         self.add('bbb', 40, text_source='post_page', url='https://www.reddit.com/r/stories/comments/bbb/x/')
         self.add('ccc', 50, text_source='feed_preview')  # truncated previews are never used

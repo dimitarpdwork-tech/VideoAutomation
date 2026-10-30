@@ -14,7 +14,7 @@ def write_schema():
 
 
 def initialize():
-    for name in ('credentials', 'backgrounds', 'music', 'stories', 'videos', 'narrations', 'output'):
+    for name in ('credentials', 'backgrounds', 'music', 'stories', 'videos', 'narrations', 'output', 'voices'):
         (ROOT / name).mkdir(exist_ok=True)
     write_schema()
     if not (CHANNELS / 'main' / 'config.json').exists():

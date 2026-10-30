@@ -9,9 +9,14 @@ import {createHash, randomBytes} from 'node:crypto';
 const root = path.resolve(process.cwd(), '..');
 const SHARED = path.join(root, 'output', 'shared');
 const KEY_FILE = () => path.join(root, 'credentials', 'anthropic_api_key.txt');
+const PEXELS_FILE = () => path.join(root, 'credentials', 'pexels_api_key.txt');
+const VOICES_DIR = path.join(root, 'voices');
+const SAMPLES_DIR = path.join(SHARED, 'voice_samples');
+const CLIP_FILE = /^[A-Za-z0-9_][A-Za-z0-9_ .-]{0,80}\.(wav|mp3|flac|m4a|ogg)$/i;
+const SAMPLE_FILE = /^(kokoro|chatterbox)_[A-Za-z0-9_ .-]{1,80}\.wav$/;
 const CHANNEL_ID = /^[a-z0-9][a-z0-9_-]{0,39}$/;
 const BATCH_ID = /^[a-zA-Z0-9_-]+$/;
-const ITEM_FILE = /^[A-Za-z0-9_.-]+\.(mp4|jpg)$/;
+const ITEM_FILE = /^(tiktok\/)?[A-Za-z0-9_.-]+\.(mp4|jpg|txt)$/;
 const VOICE = /^[abefhijpz][fm]_[a-z]+$/;
 const HEX = /^#[0-9A-Fa-f]{6}$/;
 const WORDS = /[\p{L}\p{N}_]+(?:['’\-][\p{L}\p{N}_]+)*/gu;  // same as Python's \w-based count
@@ -124,7 +129,8 @@ async function config(id = 'main') {
 }
 const base = id => (id === 'main' ? root : path.join(root, 'channels', id));
 const limits = c => (['funnel', 'long'].includes(c.video_format) ? [c.full_min_words, c.full_max_words] : [c.min_words, c.max_words]);
-const countWords = text => ((text || '').match(WORDS) || []).length;
+// Delivery cues such as [pause] are not spoken words (see delivery.py).
+const countWords = text => ((text || '').replace(/\[\s*(?:pause|tense|whisper|urgent|calm)\s*\]/gi, ' ').match(WORDS) || []).length;
 
 // Close to Python's casefold() + split(): enough for display; production re-checks.
 function fingerprint(text) {
@@ -142,6 +148,7 @@ const blank = () => ({running: false, log: [], channel: null, error: null, exitC
 const production = globalThis.__productionJob ??= blank();
 const scheduling = globalThis.__schedulingJob ??= blank();
 const generation = globalThis.__generationJob ??= blank();
+const voiceJob = globalThis.__voiceJob ??= blank();
 const job = id => jobs[id] ??= {upload: blank(), insights: {...blank(), lastAttempt: 0}, connection: blank()};
 
 // The one line worth showing when a job fails: the last message, not the traceback.
@@ -152,9 +159,10 @@ function summary(log) {
 }
 
 function start(script, args, state, tts = false) {
+  // tts: true runs in .venv-tts (Kokoro); a string names another environment.
   if (state.running) throw Error('This job is already running.');
   Object.assign(state, {running: true, error: null, log: [], exitCode: null, lastAttempt: Date.now()});
-  const child = spawn(python(tts ? '.venv-tts' : '.venv'), ['-u', path.join(root, script), ...args],
+  const child = spawn(python(typeof tts === 'string' ? tts : tts ? '.venv-tts' : '.venv'), ['-u', path.join(root, script), ...args],
     {cwd: root, windowsHide: true, env: {...process.env, PYTHONIOENCODING: 'utf-8'}});
   const append = chunk => { state.log.push(chunk.toString()); if (state.log.length > 400) state.log.shift(); };
   child.stdout.on('data', append);
@@ -193,6 +201,11 @@ async function scriptExcerpt(directory, item, batch, kind) {
   return text.slice(0, 1200);
 }
 
+async function imageCredit(relative) {
+  const record = await readJson(path.join(root, relative.replace(/\.jpg$/i, '.json')), null).catch(() => null);
+  return record ? {source: record.source, page: record.page, author: record.author, license: record.license} : {source: 'image'};
+}
+
 export async function snapshot(id = 'main') {
   const selected = await config(id), directory = base(id), state = job(id), credentials = path.join(directory, 'credentials');
   const token = await tokenStatus(credentials);
@@ -204,7 +217,7 @@ export async function snapshot(id = 'main') {
   }
   const history = await readJson(path.join(credentials, 'upload_history.json'), {});
   const records = Object.values(history);
-  const queue = [], reviewItems = [], failed = [];
+  const queue = [], reviewItems = [], failed = [], tiktok = [];
   for (const folder of (await files(path.join(directory, 'videos'))).filter(f => f.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
     const videoDir = path.join(directory, 'videos', folder.name);
     const batch = await readJson(path.join(videoDir, 'batch.json'), []);
@@ -213,6 +226,8 @@ export async function snapshot(id = 'main') {
       if (item.status === 'failed' || item.status === 'skipped') { failed.push({batch: folder.name, name: item.name, title: item.title, status: item.status, reason: item.reason}); continue; }
       if (item.status !== 'complete' || !item.video) continue;
       const review = item.review || 'pending';
+      if (item.tiktok?.length) tiktok.push({batch: folder.name, name: item.name, title: item.title, parts: item.tiktok});
+      else if (review === 'approved') tiktok.push({batch: folder.name, name: item.name, title: item.title, parts: []});
       const parts = item.format === 'funnel' && item.full_video
         ? [[item.full_video, 'full', item.full_duration_seconds], [item.video, 'teaser', item.duration_seconds]]
         : [[item.video, item.format === 'long' ? 'full' : 'short', item.duration_seconds]];
@@ -235,13 +250,14 @@ export async function snapshot(id = 'main') {
           description: item.format === 'long' ? item.full_description : item.description, fullDescription: item.full_description,
           files: parts.map(([file, kind, duration]) => ({file, kind, duration})),
           thumbnail: item.thumbnail && names.has(item.thumbnail) ? item.thumbnail : null,
-          warnings: item.variety_warnings || [], voice: item.voice, generated: !!item.generated,
+          warnings: [...(item.variety_warnings || []), ...(item.narration_warnings || []).map(w => 'Voice: ' + w)],
+          voice: item.voice, generated: !!item.generated, image: item.image ? await imageCredit(item.image) : null,
           script: await scriptExcerpt(directory, item, folder.name, parts[0][1])});
       }
     }
   }
 
-  let stories = 0, eligible = 0, generatedStories = 0, setAside = 0;
+  let stories = 0, eligible = 0, generatedStories = 0, setAside = 0, conceptSources = 0;
   const [low, high] = limits(selected);
   const usage = await readJson(path.join(SHARED, 'story_usage.json'), {}), seen = new Set();
   const done = Object.fromEntries(Object.entries(usage).filter(([, row]) => row.status === 'complete'));
@@ -255,7 +271,9 @@ export async function snapshot(id = 'main') {
     if (story.text_source === 'generated' && unused) generatedStories++;
     const hash = fingerprint(story.text), title = (story.title || '').trim(), count = countWords(`${story.title} ${story.text}`);
     const storyId = story.id || file.name.replace(/\.json$/, '');
-    if (unused && story.text_source !== 'feed_preview' && !done[hash] && !doneIds.has(storyId) && !seen.has(hash)
+    const concept = story.text_source === 'post_page' && (selected.collected_stories || 'rewrite') !== 'narrate';
+    if (concept && unused && !story.concept_used_by) conceptSources++;
+    if (unused && story.text_source !== 'feed_preview' && !concept && !done[hash] && !doneIds.has(storyId) && !seen.has(hash)
         && title && title.length <= 100 && !/[<>]/.test(title) && count >= low && count <= high) { eligible++; seen.add(hash); }
   }
   const backgroundFiles = (await files(path.join(root, 'backgrounds'))).filter(f => f.isFile() && /\.mp4$/i.test(f.name)).map(f => f.name);
@@ -268,20 +286,26 @@ export async function snapshot(id = 'main') {
   const related = (await readJson(path.join(SHARED, 'related_links.json'), [])).filter(r => r.channel === id && !r.done)
     .map(r => ({...r, full_title: titles[r.full_id] || r.title}));
   const hasApiKey = !!process.env.ANTHROPIC_API_KEY || await exists(KEY_FILE());
+  const hasPexelsKey = !!process.env.PEXELS_API_KEY || await exists(PEXELS_FILE());
+  const voiceClips = (await files(VOICES_DIR)).filter(f => f.isFile() && CLIP_FILE.test(f.name)).map(f => f.name).sort();
+  const voiceSamples = (await readJson(path.join(SAMPLES_DIR, 'index.json'), [])).filter(s => SAMPLE_FILE.test(s.file || ''));
+  const voiceInstalled = await exists(python('.venv-voice'));
   const musicFiles = (await files(path.join(root, 'music'))).filter(f => f.isFile() && /\.(mp3|m4a|aac|wav|ogg|flac)$/i.test(f.name)).length;
   const topPerformers = queue.filter(v => v.insights?.viewCount).sort((a, b) => b.insights.viewCount - a.insights.viewCount).slice(0, 5)
-    .map(v => ({title: v.title, kind: v.kind, views: v.insights.viewCount, videoId: v.videoId}));
+    .map(v => ({title: v.title, kind: v.kind, views: v.insights.viewCount, videoId: v.videoId, watched: v.insights.averageViewPercentage ?? null}));
   const {presets, grades, formats} = await schema();
   return {
     channel: {...selected, connected, token}, channels: profiles, presets: Object.keys(presets), grades, formats,
-    backgroundFiles, eligibleStories: eligible, generatedStories, reviewStories: setAside,
+    backgroundFiles, eligibleStories: eligible, generatedStories, reviewStories: setAside, conceptSources,
+    hasPexelsKey, voiceClips, voiceSamples, voiceInstalled, voices: view(voiceJob), tiktok: tiktok.slice(-30),
+    imageMode: selected.background_mode === 'image',
     related, hasApiKey, musicFiles, topPerformers, reviewItems, failed: failed.slice(-20),
     stats: {stories, backgrounds: backgroundFiles.length, total: queue.length,
       review: queue.filter(v => v.status === 'review').length,
       ready: queue.filter(v => v.status === 'ready' || v.status === 'waiting').length,
       uploaded: queue.filter(v => v.status === 'uploaded' || v.status === 'scheduled').length},
     queue, next: queue.find(v => v.status === 'ready' || v.status === 'resumable') ?? null,
-    insights: {...state.insights, connected: insightsConnected, updatedAt: cache.updatedAt,
+    insights: {...state.insights, connected: insightsConnected, updatedAt: cache.updatedAt, retention: cache.retention ?? null,
       totals: queue.reduce((t, v) => ({views: t.views + (v.insights?.viewCount ?? 0), likes: t.likes + (v.insights?.likeCount ?? 0),
         comments: t.comments + (v.insights?.commentCount ?? 0)}), {views: 0, likes: 0, comments: 0})},
     upload: view(state.upload), connection: state.connection, production: view(production),
@@ -296,9 +320,18 @@ export async function media(id, batch, file, range) {
   await config(id);
   if (!BATCH_ID.test(batch || '') || !ITEM_FILE.test(file || '')) throw Error('Invalid file');
   const folder = path.join(base(id), 'videos', batch), full = path.join(folder, file);
-  if (path.dirname(full) !== folder) throw Error('Invalid file');
+  if (path.dirname(full) !== (file.startsWith('tiktok/') ? path.join(folder, 'tiktok') : folder)) throw Error('Invalid file');
+  return streamFile(full, file.endsWith('.jpg') ? 'image/jpeg' : file.endsWith('.txt') ? 'text/plain; charset=utf-8' : 'video/mp4', range);
+}
+
+// A voice sample from output/shared/voice_samples (Settings > Voice).
+export async function voiceSample(file, range) {
+  if (!SAMPLE_FILE.test(file || '')) throw Error('Invalid file');
+  return streamFile(path.join(SAMPLES_DIR, file), 'audio/wav', range);
+}
+
+async function streamFile(full, type, range) {
   const {size} = await fs.stat(full);
-  const type = file.endsWith('.jpg') ? 'image/jpeg' : 'video/mp4';
   const match = /^bytes=(\d*)-(\d*)$/.exec(range || '');
   if (!match || (!match[1] && !match[2])) {
     return {status: 200, headers: {'Content-Type': type, 'Content-Length': String(size), 'Accept-Ranges': 'bytes'},
@@ -344,7 +377,7 @@ export async function syncInsights(connect = false, id = 'main') {
   return {started: true};
 }
 
-const anyJobRunning = id => production.running || generation.running || scheduling.running || job(id).upload.running;
+const anyJobRunning = id => production.running || generation.running || scheduling.running || voiceJob.running || job(id).upload.running;
 
 export async function uploadNext(id = 'main') {
   const data = await snapshot(id);
@@ -359,7 +392,9 @@ export async function uploadNext(id = 'main') {
 export async function produce(id, count) {
   const data = await snapshot(id);
   if (!Number.isInteger(count) || count < 1 || count > 100) throw Error('Choose between 1 and 100 videos.');
-  if (!data.backgroundFiles.length) throw Error('Add at least one background video to the backgrounds folder first.');
+  if (!data.backgroundFiles.length && !data.imageMode) throw Error('Add at least one background video to the backgrounds folder first, or set the channel to use one image per story.');
+  if (data.channel.voice_engine === 'chatterbox' && !data.voiceInstalled) throw Error('This channel uses the Chatterbox voice, which is not installed. Run setup_voice, or choose Kokoro in Settings.');
+  if (voiceJob.running) throw Error('Voice samples are being made. Wait for them to finish.');
   if (count > data.eligibleStories) throw Error(`Only ${data.eligibleStories} unused stories fit this channel's word limits.`);
   if (production.running) throw Error('Production or autopilot is already running. Jobs run one batch at a time.');
   production.channel = id;
@@ -430,17 +465,32 @@ export async function saveSettings(id, values) {
   if (typeof v.caption_font !== 'string' || !/^[A-Za-z0-9 \-]{2,40}$/.test(v.caption_font)) fail('Caption font: a font name like Arial Black.');
   for (const [key, label] of [['caption_color', 'Word caption colour'], ['phrase_color', 'Phrase caption colour']]) if (!HEX.test(v[key] || '')) fail(`${label}: a colour like #FFD400.`);
   if (!grades.includes(v.color_grade)) fail('Choose a colour grade.');
+  if (!['kokoro', 'chatterbox'].includes(v.voice_engine)) fail('Choose a narration engine.');
+  for (const key of ['voice_clip', 'voice_clip_male', 'voice_clip_female']) if (v[key] && !CLIP_FILE.test(v[key])) fail('Narrator clip: choose a file from the voices folder.');
+  if (!['standard', 'turbo'].includes(v.chatterbox_model)) fail('Choose a Chatterbox model.');
+  if (!Number.isFinite(v.expressiveness) || v.expressiveness < 0.25 || v.expressiveness > 1.5) fail('Expressiveness must be between 0.25 and 1.5.');
+  if (!['clips', 'image'].includes(v.background_mode)) fail('Choose a background type.');
+  if (!Array.isArray(v.image_keywords) || v.image_keywords.length > 20 || v.image_keywords.some(k => typeof k !== 'string' || k.length > 60 || /[<>{}]/.test(k))) fail('Image keywords: up to 20 phrases, each under 60 characters.');
+  if (!['rewrite', 'narrate'].includes(v.collected_stories)) fail('Choose how collected stories are used.');
+  if (!Number.isInteger(v.long_target_words) || v.long_target_words < 2000 || v.long_target_words > 30000) fail('Long story length must be a whole number from 2000 to 30000 words.');
+  if (!Number.isInteger(v.tiktok_part_seconds) || v.tiktok_part_seconds < 65 || v.tiktok_part_seconds > 600) fail('TikTok part length must be 65 to 600 seconds.');
+  if (!Array.isArray(v.tiktok_hashtags) || v.tiktok_hashtags.length > 10 || v.tiktok_hashtags.some(t => !/^#?[\p{L}\p{N}_]{1,50}$/u.test(t))) fail('TikTok hashtags: up to 10, letters and numbers only.');
   const clean = {
     ...v, hashtags: v.hashtags.map(t => (t.startsWith('#') ? t : '#' + t)), category_id: String(v.category_id),
     teaser_ctas: v.teaser_ctas.map(t => t.trim()).filter(Boolean), voice_male: v.voice_male || null, voice_female: v.voice_female || null,
     story_category: String(v.story_category || 'General stories').slice(0, 100),
+    voice_clip: v.voice_clip || '', voice_clip_male: v.voice_clip_male || null, voice_clip_female: v.voice_clip_female || null,
+    image_keywords: v.image_keywords.map(k => k.trim()).filter(Boolean),
+    tiktok_hashtags: v.tiktok_hashtags.map(t => (t.startsWith('#') ? t : '#' + t)),
   };
   for (const key of ['credit_source', 'clean_language', 'title_card', 'progress_bar', 'require_review']) clean[key] = v[key] !== false;
   const keys = ['voice', 'voice_male', 'voice_female', 'speed', 'period_pause', 'caption_style', 'min_words', 'max_words', 'backgrounds',
     'schedule', 'privacy', 'category_id', 'hashtags', 'tags', 'description_template', 'credit_source', 'video_format', 'full_min_words',
     'full_max_words', 'max_full_minutes', 'teaser_seconds', 'teaser_cta', 'teaser_ctas', 'teaser_description_template',
     'full_description_template', 'fiction_note', 'clean_language', 'title_card', 'title_card_seconds', 'progress_bar', 'music_volume',
-    'generator_model', 'story_category', 'require_review', 'max_uploads_per_day', 'caption_font', 'caption_color', 'phrase_color', 'color_grade'];
+    'generator_model', 'story_category', 'require_review', 'max_uploads_per_day', 'caption_font', 'caption_color', 'phrase_color', 'color_grade',
+    'voice_engine', 'voice_clip', 'voice_clip_male', 'voice_clip_female', 'chatterbox_model', 'expressiveness', 'background_mode',
+    'image_keywords', 'collected_stories', 'long_target_words', 'tiktok_part_seconds', 'tiktok_hashtags'];
   await config(id);
   // Merge into the file as it is now: a sign-in finishing meanwhile keeps its channel binding.
   await withJsonLock(path.join(root, 'channels', id, 'config.json'), current => {
@@ -523,7 +573,10 @@ export async function generateStories(id, count) {
 export async function autopilot(id, count) {
   await config(id);
   if (!Number.isInteger(count) || count < 1 || count > 30) throw Error('Choose between 1 and 30 stories.');
-  if (!(await files(path.join(root, 'backgrounds'))).some(f => f.isFile() && /\.mp4$/i.test(f.name))) throw Error('Add at least one background video first.');
+  const c = await config(id);
+  if (c.background_mode !== 'image' && !(await files(path.join(root, 'backgrounds'))).some(f => f.isFile() && /\.mp4$/i.test(f.name))) throw Error('Add at least one background video first, or set the channel to use one image per story.');
+  if (c.voice_engine === 'chatterbox' && !(await exists(python('.venv-voice')))) throw Error('This channel uses the Chatterbox voice, which is not installed. Run setup_voice, or choose Kokoro in Settings.');
+  if (voiceJob.running) throw Error('Voice samples are being made. Wait for them to finish.');
   if (production.running || generation.running || scheduling.running) throw Error('Another job is running. Wait for it to finish.');
   production.channel = id;
   start('autopilot.py', ['--channel', id, '--count', String(count)], production);
@@ -542,6 +595,38 @@ export async function saveApiKey(key, confirmRemove) {
   await fs.mkdir(path.dirname(KEY_FILE()), {recursive: true});
   await fs.writeFile(KEY_FILE(), key, {mode: 0o600});
   await fs.chmod(KEY_FILE(), 0o600).catch(() => {});
+  return {saved: true};
+}
+
+export async function makeVoiceSamples(id) {
+  await config(id);
+  if (!(await exists(python('.venv-tts')))) throw Error('Run setup first: the Kokoro voice is not installed.');
+  if (anyJobRunning(id)) throw Error('Another job is running. Wait for it to finish.');
+  start('voice_samples.py', [], voiceJob, true);
+  return {started: true};
+}
+
+export async function exportTikTok(id) {
+  const data = await snapshot(id);
+  if (!data.tiktok.some(t => !t.parts.length)) throw Error('Approve videos in Review first; each approved video is exported once.');
+  if (anyJobRunning(id)) throw Error('Another job is running. Wait for it to finish.');
+  production.channel = id;
+  start('tiktok_export.py', ['--channel', id], production);
+  return {started: true};
+}
+
+export async function savePexelsKey(key, confirmRemove) {
+  if (typeof key !== 'string') throw Error('Enter an API key.');
+  key = key.trim();
+  if (key === '') {
+    if (!confirmRemove) throw Error('Leave the field empty and confirm to remove the saved key.');
+    await fs.rm(PEXELS_FILE(), {force: true});
+    return {saved: true, removed: true};
+  }
+  if (!/^[A-Za-z0-9]{20,100}$/.test(key)) throw Error('That does not look like a Pexels API key.');
+  await fs.mkdir(path.dirname(PEXELS_FILE()), {recursive: true});
+  await fs.writeFile(PEXELS_FILE(), key, {mode: 0o600});
+  await fs.chmod(PEXELS_FILE(), 0o600).catch(() => {});
   return {saved: true};
 }
 

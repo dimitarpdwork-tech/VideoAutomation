@@ -44,7 +44,9 @@ function ReviewCard({channel, item, selected, onSelect, onDone, busy, setBusy, s
       </ul>}
       <details><summary>Description</summary><pre>{item.description}</pre></details>
       {item.script && <details><summary>Script (opening)</summary><p className="script">{item.script}{item.script.length >= 1200 ? '…' : ''}</p></details>}
-      <p className="review-meta">{item.batch} · voice {item.voice || 'default'}{item.generated ? ' · AI-written story' : ''}</p>
+      <p className="review-meta">{item.batch} · voice {item.voice || 'default'}{item.generated ? ' · AI-written story' : ''}
+        {item.image && <> · photo: {item.image.page ? <a href={item.image.page} target="_blank" rel="noreferrer">{item.image.source}</a> : item.image.source}
+          {item.image.author ? ` by ${item.image.author}` : ''}</>}</p>
       <div className="review-actions">
         <button className="approve" disabled={busy} onClick={() => act({action: 'review', names: [item.name], decision: 'approved'})}>Approve</button>
         <input aria-label="Reason for rejecting (optional)" placeholder="Reason (optional)" value={note} maxLength={500} onChange={e => setNote(e.target.value)}/>

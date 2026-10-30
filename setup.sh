@@ -17,4 +17,6 @@ fi
 .venv-tts/bin/python -m pip install -r requirements-tts.txt
 .venv/bin/python initialize.py
 (cd dashboard && npm ci && npm run build)
+# The human-sounding Chatterbox voice; optional, so a failure here does not stop setup.
+"$PYTHON" setup_voice.py || echo "Note: Chatterbox voice setup did not finish; run ./setup_voice.sh later. Kokoro narration works."
 echo "Setup complete. Read README.md to add your credentials and backgrounds, then run ./start_dashboard.sh"
