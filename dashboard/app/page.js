@@ -17,6 +17,20 @@ function Icon({type, size = 20}) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{shapes[type] || shapes.play}</svg>;
 }
 
+const JOBS = [['generation', 'Writing stories'], ['production', 'Making videos'], ['scheduling', 'Scheduling uploads'],
+  ['upload', 'Uploading'], ['voices', 'Working on voice samples'], ['designs', 'Designing voices']];
+
+// What is running right now, and its latest step, so nothing happens silently.
+function WorkingBar({data}) {
+  const running = JOBS.filter(([key]) => data?.[key]?.running);
+  if (!running.length) return null;
+  return <div className="working-bar" role="status">{running.map(([key, label]) => {
+    const lines = (data[key].log || []).join('').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const last = [...lines].reverse().find(l => !/^(Traceback|File |Warning|UserWarning|warnings\.warn)/.test(l)) || 'Starting…';
+    return <div key={key}><span className="pulse"/><strong>{label}{data[key].channel ? ` · ${data.channels?.find(c => c.id === data[key].channel)?.name || data[key].channel}` : ''}</strong><span className="step">{last.slice(0, 160)}</span></div>;
+  })}</div>;
+}
+
 function nextStep(data) {
   if (!data) return null;
   const c = data.channel;
@@ -33,7 +47,10 @@ function nextStep(data) {
 }
 
 export default function Home() {
-  const [channel, setChannel] = useState('main');
+  const [channel, setChannelState] = useState('main');
+  // Remember the chosen channel across restarts (per browser; harmless if storage is unavailable).
+  useEffect(() => { try { const saved = localStorage.getItem('channel'); if (saved) setChannelState(saved); } catch {} }, []);
+  const setChannel = id => { setChannelState(id); try { localStorage.setItem('channel', id); } catch {} };
   const channelRef = useRef(channel); channelRef.current = channel;
   const [data, setData] = useState(null), [error, setError] = useState(''), [sending, setSending] = useState(false), [filter, setFilter] = useState('all');
   const [preview, setPreview] = useState(null), [offline, setOffline] = useState(false);
@@ -45,7 +62,9 @@ export default function Home() {
       setOffline(false);
       if (channelRef.current === channel) setData(result);
     } catch (e) {
-      if (e instanceof TypeError) setOffline(true); else setError(e.message);
+      if (e instanceof TypeError) setOffline(true);
+      else if (/profile not found/i.test(e.message) && channel !== 'main') setChannel('main');
+      else setError(e.message);
     }
   }
   useEffect(() => {
@@ -78,6 +97,7 @@ export default function Home() {
   return <div className="shell">
     <header><strong className="brand">Story Shorts Studio</strong><div className={'connection ' + status[0]}><i/>{status[1]}</div></header>
     <main>
+      <WorkingBar data={data}/>
       {offline && <div role="alert" className="error">The dashboard server stopped. Start it again with start_dashboard (the window must stay open).</div>}
       {step && <section className="next-step" aria-label="Next step"><div className="eyebrow">NEXT STEP</div><h1>{step[0]}</h1><p>{step[1]}</p></section>}
       <ChannelControls data={data} channel={channel} onChannel={id => { setData(null); setChannel(id); }} onRefresh={refresh}/>

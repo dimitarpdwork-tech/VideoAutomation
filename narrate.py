@@ -1,6 +1,6 @@
 r"""Generate one Kokoro narration and automatic word timestamps.
 
-Run with the .venv-tts interpreter: python narrate.py stories/1nspy0i.json
+Run with the .venv-tts interpreter: python narrate.py stories/my_story.json
 """
 import argparse
 import json

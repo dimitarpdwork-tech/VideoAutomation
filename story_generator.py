@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
 
+import claude_json
 import delivery
 import persona as narrator_persona
 import variety
@@ -60,7 +61,7 @@ BASE_RULES = """Rules for every story:
 - Delivery cues for the narrator, used sparingly (at most one per 80 words): [pause] right before a reveal; [tense], [whisper] or [urgent] at the start of a sentence that needs that delivery. Never inside quotation marks, never two in a row.
 - image_query: a 3-6 word stock-photo search for ONE atmospheric background image that fits the story: a place, object or landscape, no people, no faces, no gore (e.g. "abandoned farmhouse at night").
 
-Reply with one JSON object inside <json></json> tags and nothing else."""
+Return the result as one JSON object through the submit tool."""
 
 GENRES = {
     'horror': """You write original first-person horror stories for narrated videos, in the tradition of r/nosleep and late-night radio.
@@ -349,10 +350,18 @@ def parse_reply(text, length, persona=None):
     return apply_persona(result, data if length == 'full' else {}, persona)
 
 
-def ask_model(client, model, prompt, length, system=None, max_tokens=None):
-    response = client.messages.create(
-        model=model, max_tokens=max_tokens or (4000 if length == 'full' else 1200), system=system or BASE_RULES,
-        messages=[{'role': 'user', 'content': prompt}])
+def ask_model(client, model, prompt, length, system=None, max_tokens=None, structured=True):
+    """Claude's reply as text. Structured replies (JSON) come through a forced tool call."""
+    max_tokens = max_tokens or {'full': 8000, 'long': 6000}.get(length, 2500)
+    try:
+        if structured:
+            return claude_json.ask(client, model, prompt, system or BASE_RULES, max_tokens)
+        response = client.messages.create(model=model, max_tokens=max_tokens, system=system or BASE_RULES,
+                                          messages=[{'role': 'user', 'content': prompt}])
+    except claude_json.ReplyError as exc:
+        raise GenerationError(str(exc)) from exc
+    if getattr(response, 'stop_reason', None) == 'max_tokens':
+        raise GenerationError('the reply was cut off because it was too long')
     return ''.join(block.text for block in response.content if getattr(block, 'type', '') == 'text')
 
 
@@ -373,7 +382,7 @@ def write_long(client, model, config, low, high, own, reddit, avoid, feedback, l
                  if narrator_persona.active(config) else '') + '.']
     if feedback:
         lines.append(f'\nThe previous attempt was rejected: {feedback}. Choose something clearly different.')
-    outline = _json(ask_model(client, model, '\n'.join(lines), 'long', system, 3000))
+    outline = _json(ask_model(client, model, '\n'.join(lines), 'long', system, 4000))
     plan = outline.get('chapters') or []
     if not isinstance(plan, list) or len(plan) < 2:
         raise GenerationError('the outline had no chapters')
@@ -393,7 +402,7 @@ def write_long(client, model, config, low, high, own, reddit, avoid, feedback, l
             'Continue seamlessly; no chapter heading, no recap of earlier chapters'
             + ('; bring the story to a soft, settled close.' if number == len(plan) else '.'),
             'Reply with the chapter text only, inside <text></text> tags.'])
-        reply = ask_model(client, model, prompt, 'long', system, max(3000, per_chapter * 3))
+        reply = ask_model(client, model, prompt, 'long', system, max(4000, per_chapter * 3), structured=False)
         match = re.search(r'<text>(.*?)</text>', reply, re.S)
         chapter_text = (match.group(1) if match else reply).strip()
         if len(_words(chapter_text)) < per_chapter * 0.4:
@@ -454,6 +463,7 @@ def generate(channel, count, length='auto', client=None, log=print, mode='auto')
                 f'({source.get("score") or "?"} upvotes).')
         feedback = None
         for attempt in range(1, ATTEMPTS + 1):
+            log(f'Story {number} of {count}: writing' + (f' (attempt {attempt} of {ATTEMPTS})' if attempt > 1 else '') + '…')
             try:
                 if length == 'long':
                     candidate = write_long(client, model, config, low, high, own, reddit, avoid, feedback, log)

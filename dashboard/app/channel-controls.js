@@ -172,6 +172,7 @@ export default function ChannelControls({data, channel, onChannel, onRefresh}) {
   const [form, setForm] = useState(null), [lists, setLists] = useState({hashtags: '', tags: '', ctas: '', images: '', tiktok: ''});
   const [pexelsKey, setPexelsKey] = useState('');
   const [message, setMessage] = useState(''), [busy, setBusy] = useState(false);
+  useEffect(() => { if (!message) return; const t = setTimeout(() => setMessage(''), 9000); return () => clearTimeout(t); }, [message]);
   const c = data?.channel;
   const configKey = JSON.stringify(c && {...c, connected: undefined, token: undefined});
   useEffect(() => {
@@ -345,7 +346,6 @@ export default function ChannelControls({data, channel, onChannel, onRefresh}) {
         </fieldset>
       </>}
       <button disabled={busy}>Save settings</button>
-      {message && <span role="status" className="channel-message inline">{message}</span>}
       <datalist id="voices">{VOICES.map(v => <option key={v} value={v}/>)}</datalist>
       <datalist id="zones">{ZONES.map(z => <option key={z} value={z}/>)}</datalist>
     </form>}
@@ -407,6 +407,6 @@ export default function ChannelControls({data, channel, onChannel, onRefresh}) {
         {t.parts.map((p, i) => <span key={p.file}> <a href={tiktokUrl(channel, t.batch, p.file)} download>Part {i + 1}</a>
           {' · '}<a href={tiktokUrl(channel, t.batch, p.file.replace(/\.mp4$/, '.txt'))} target="_blank" rel="noreferrer">caption</a></span>)}</li>)}</ul>
       <small>Files are also in each batch folder under tiktok/, with HOW_TO_POST.txt.</small></details>}
-    {message && !settingsOpen && <p role="status" className="channel-message">{message}</p>}
+    {message && <div role="status" className="toast" onClick={() => setMessage('')}>{message}<small>click to close</small></div>}
   </section>;
 }
