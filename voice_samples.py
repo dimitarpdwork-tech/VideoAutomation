@@ -18,7 +18,7 @@ from pathlib import Path
 
 import chatterbox_narrator as cb  # stdlib-only at import time: shares the texts and folders
 import voice_worker
-from channel_config import ROOT, venv_python, write_json
+from channel_config import ROOT, read_json, venv_python, write_json
 
 # name, Kokoro voice, what it sounds like
 STARTERS = [
@@ -49,9 +49,23 @@ def kokoro(text, voice, folder):
     return folder / voice / 'narration.wav'
 
 
-def main():
+def clip_description(stem, starters):
+    """What a clip sounds like: a starter's note, a designed voice's description, or 'Your clip'."""
+    if stem in starters:
+        return starters[stem]
+    sidecar = read_json(cb.VOICES / f'{stem}.json', {}) or {}
+    if sidecar.get('description'):
+        return 'Designed: ' + sidecar['description']
+    return 'Your clip'
+
+
+def main(only=None):
+    """Make every sample, or with `only` (a clip name without extension) just that clip's Chatterbox sample."""
     cb.VOICES.mkdir(exist_ok=True)
     cb.SAMPLES.mkdir(parents=True, exist_ok=True)
+    if only:
+        index = [row for row in read_json(cb.SAMPLES / 'index.json', []) or [] if row.get('engine') == 'kokoro']
+        return chatterbox_samples(index, only)
     index = []
     with tempfile.TemporaryDirectory() as temporary:
         folder = Path(temporary)
@@ -65,10 +79,15 @@ def main():
             shutil.copyfile(kokoro(cb.SAMPLE_TEXT, voice, folder / 'sample'), sample)
             index.append({'file': sample.name, 'engine': 'kokoro', 'voice': voice, 'label': f'Kokoro · {voice}',
                           'description': description})
+    chatterbox_samples(index)
+
+
+def chatterbox_samples(index, only=None):
     if voice_worker.installed():
-        print('Chatterbox samples (each clip in voices/, plus the built-in voice)...', flush=True)
-        result = subprocess.run([str(venv_python('.venv-voice')), '-u', str(ROOT / 'chatterbox_narrator.py'), '--samples'],
-                                cwd=ROOT)
+        print('Chatterbox samples (each clip in voices/, plus the built-in voice)...' if not only
+              else f'Chatterbox sample for {only}...', flush=True)
+        command = [str(venv_python('.venv-voice')), '-u', str(ROOT / 'chatterbox_narrator.py'), '--samples']
+        result = subprocess.run(command + (['--only', only] if only else []), cwd=ROOT)
         if result.returncode:
             print('Chatterbox samples stopped early; the ones finished are listed.', flush=True)
         descriptions = {f'starter_{name}': description for name, _, description in STARTERS}
@@ -79,14 +98,17 @@ def main():
                 continue  # the clip was deleted since
             index.append({'file': wav.name, 'engine': 'chatterbox', 'clip': clip,
                           'label': 'Chatterbox · ' + ('built-in voice' if stem == 'built-in' else stem.replace('_', ' ')),
-                          'description': descriptions.get(stem, 'Your clip' if clip else 'Chatterbox default narrator')})
+                          'description': clip_description(stem, descriptions) if clip else 'Chatterbox default narrator'})
     else:
         print('Chatterbox is not installed, so only Kokoro samples were made. Run setup_voice to add it.', flush=True)
     # Chatterbox first: those are the ones to choose from.
     index.sort(key=lambda row: (row['engine'] != 'chatterbox', row['label']))
     write_json(cb.SAMPLES / 'index.json', index)
-    print(f'{len(index)} voice samples ready. Listen in the dashboard: Settings > Voice.', flush=True)
+    print(f'{len(index)} voice samples ready. Listen in the dashboard under Narrator.', flush=True)
 
 
 if __name__ == '__main__':
-    main()
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--only', help='Only (re)make the Chatterbox sample for this clip name, without extension')
+    main(parser.parse_args().only)

@@ -15,6 +15,7 @@ backgrounds/*
 .venv/
 .venv-tts/
 .venv-voice/
+.venv-design/
 .runtimes/
 .uv-cache/
 .model-cache/

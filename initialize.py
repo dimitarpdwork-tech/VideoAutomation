@@ -3,14 +3,14 @@
 Also writes output/shared/settings_schema.json: the channel defaults, presets and
 allowed values, which the dashboard reads so it never disagrees with Python.
 """
-from channel_config import (ROOT, CHANNELS, SHARED, CHANNEL_DEFAULTS, PRESETS, GRADES, FORMATS,
+from channel_config import (ROOT, CHANNELS, SHARED, CHANNEL_DEFAULTS, PRESETS, GRADES, FORMATS, VOICE_CHARACTERS,
                             PRIVACY_OPTIONS, create_channel, write_json)
 
 
 def write_schema():
     write_json(SHARED / 'settings_schema.json', {
         'defaults': CHANNEL_DEFAULTS, 'presets': PRESETS, 'grades': list(GRADES),
-        'formats': list(FORMATS), 'privacy': list(PRIVACY_OPTIONS)})
+        'formats': list(FORMATS), 'privacy': list(PRIVACY_OPTIONS), 'voice_characters': list(VOICE_CHARACTERS)})
 
 
 def initialize():

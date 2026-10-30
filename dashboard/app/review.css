@@ -52,3 +52,12 @@ tr.clickable{cursor:pointer}tr.clickable:hover{background:#fafaf6}
 .voice-panel>small{font-size:10px;color:#5f6657}
 .channel-controls button.folder,.folder-row button{background:white}
 .folder-row{margin-top:10px}
+.character-block,.designer-block{border-top:1px solid var(--line);padding-top:12px;display:flex;flex-direction:column;gap:8px}
+.voice-subhead{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.voice-subhead strong,.designer-block summary strong{font:700 13px Manrope,Arial,sans-serif}
+.voice-subhead small,.designer-block summary small{font-size:10px;color:#5f6657}
+.designer-block summary{cursor:pointer;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.designer-block textarea{width:100%;box-sizing:border-box}
+.examples{display:flex;gap:6px;flex-wrap:wrap}.examples button{font-size:10px!important;padding:5px 9px!important}
+.designer-block>button.primary{align-self:flex-start}
+.keep{display:flex;gap:6px;align-items:center}.keep input{width:150px;font-size:11px!important}
+.sample-list li>span:empty{display:block}
