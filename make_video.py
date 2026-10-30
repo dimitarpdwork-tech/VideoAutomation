@@ -55,6 +55,9 @@ def background_offset(background, duration, rng=random):
 
 
 def pick_music(folder, rng=random):
+    """A track: the file itself, or a random one from a folder."""
+    if folder and Path(folder).is_file() and Path(folder).suffix.lower() in MUSIC_TYPES:
+        return Path(folder)
     if not folder or not Path(folder).is_dir():
         return None
     tracks = sorted(p for p in Path(folder).iterdir() if p.suffix.lower() in MUSIC_TYPES)
@@ -378,14 +381,60 @@ CLEAN = ("aeval=exprs='if(isnan(val(0))+isinf(val(0)),0,val(0))|if(isnan(val(1))
 LOUDNESS = 'loudnorm=I=-14:TP=-1.5:LRA=11'
 
 
-def audio_filter(music_volume, has_music, character='natural'):
+MUSIC_FADE = 1.2        # seconds the story music and the host music take to swap
+HOST_MUSIC_GAIN = 2.0   # the host's music sits a little higher than the story's tension bed
+
+
+def fade_lead(start):
+    """How early the host music starts before the host's first word."""
+    return min(MUSIC_FADE, start)
+
+
+def music_envelopes(spans, fade=MUSIC_FADE):
+    """FFmpeg volume expressions (story, host): the story music fades out around each
+    host span while the host music fades in, and back."""
+    if not spans:
+        return '1', '0'
+    factors = [f"(1-clip(min(t-{a - fade:.3f}\\,{b + fade:.3f}-t)/{fade}\\,0\\,1))" for a, b in spans]
+    story = '*'.join(factors)
+    return story, f'1-{story}'
+
+
+def audio_filter(music_volume, has_music, character='natural', music_input=2, host_input=None, spans=()):
+    """Voice (with its character), then the music ducked under it, then loudness.
+
+    music_input: the story music's input index (when has_music); host_input: the
+    host music's input, faded in only during `spans` (the host's lines).
+    """
     voice = voice_character(character)
-    if not has_music:
+    streams, music = [], ''
+    story_env, host_env = music_envelopes(spans if host_input is not None else ())
+    if has_music:
+        music += (f";[{music_input}:a]aresample=48000,aformat=channel_layouts=stereo,volume={music_volume:.3f},"
+                  f"volume='{story_env}':eval=frame[ms]")
+        streams.append('[ms]')
+    if host_input is not None and spans:
+        # The tune starts from its first note each time the host speaks.
+        pieces = ''.join(f'[h{n}]' for n in range(len(spans)))
+        music += (f";[{host_input}:a]aresample=48000,aformat=channel_layouts=stereo,"
+                  f"volume={music_volume * HOST_MUSIC_GAIN:.3f},asplit={len(spans)}{pieces}")
+        for n, (a, b) in enumerate(spans):
+            start = max(0.0, a - fade_lead(a))
+            music += (f';[h{n}]atrim=0:{b - start + MUSIC_FADE + 0.5:.3f},asetpts=PTS-STARTPTS,'
+                      f'adelay={round(start * 1000)}:all=1,apad[hp{n}]')
+        joined = ''.join(f'[hp{n}]' for n in range(len(spans)))
+        music += (f";{joined}amix=inputs={len(spans)}:duration=first:normalize=0," if len(spans) > 1 else f';{joined}') + \
+            f"volume='{host_env}':eval=frame[mh]"
+        streams.append('[mh]')
+    if not streams:
         return f'{voice};[voice]{CLEAN},{LOUDNESS},{CLEAN}[a]'
+    graph = f'{voice};[voice]{CLEAN},asplit[v1][v2]' + music
+    if len(streams) > 1:
+        graph += f";{''.join(streams)}amix=inputs={len(streams)}:duration=first:normalize=0[m]"
+    else:
+        graph += f';{streams[0]}anull[m]'
     # Gentle ducking: music dips under speech without pumping back up in every pause.
-    return (f'{voice};[voice]{CLEAN},asplit[v1][v2];'
-            f'[2:a]aresample=48000,aformat=channel_layouts=stereo,volume={music_volume:.3f}[m];'
-            f'[m][v1]sidechaincompress=threshold=0.05:ratio=4:attack=20:release=600[duck];'
+    return (graph + ';[m][v1]sidechaincompress=threshold=0.05:ratio=4:attack=20:release=600[duck];'
             f'[v2][duck]amix=inputs=2:duration=first:normalize=0,{LOUDNESS},{CLEAN}[a]')
 
 
@@ -443,6 +492,7 @@ def main():
     parser.add_argument('--host-name', help="Channel name shown while the host speaks")
     parser.add_argument('--music', type=Path, help='Folder of music tracks; one is picked at random')
     parser.add_argument('--music-volume', type=float, default=0.12)
+    parser.add_argument('--host-music', type=Path, help="Track (or folder) played while the channel host speaks")
     parser.add_argument('--font', default='Arial Black')
     parser.add_argument('--word-color', default='#FFD400')
     parser.add_argument('--phrase-color', default='#FFFFFF')
@@ -497,13 +547,19 @@ def main():
         scene = (inputs.count('-i'), host_spans, is_video)
         inputs += (['-stream_loop', '-1', '-i', str(scene_file)] if is_video
                    else ['-framerate', '30', '-i', str(scene_file)])
+    host_track = host_input = None
+    if host_spans and args.music_volume > 0 and args.host_music:
+        host_track = pick_music(args.host_music.resolve())
+        if host_track:
+            host_input = inputs.count('-i')
+            inputs += ['-stream_loop', '-1', '-i', str(host_track)]
     graph = video_filter(args.format, None if prepared else video_size(background), captions.name, duration,
                          args.progress_bar, args.grade, image_pan(args.format, image_size, duration) if prepared else None,
                          vignette_input, scene)
     video_graph = graph
 
     def command(chosen, character):
-        full_graph = video_graph + ';' + audio_filter(args.music_volume, bool(track), character)
+        full_graph = video_graph + ';' + audio_filter(args.music_volume, bool(track), character, 2, host_input, host_spans)
         return [imageio_ffmpeg.get_ffmpeg_exe(), '-hide_banner', '-loglevel', 'error', '-y', *inputs,
                 '-filter_complex', full_graph, '-map', '[v]', '-map', '[a]',
                 '-t', f'{duration:.3f}', *encoder_args(chosen),
@@ -554,7 +610,7 @@ def main():
             if temporary:
                 temporary.unlink(missing_ok=True)
     os.replace(partial, output)
-    extras = ', '.join(filter(None, [args.format, encoder, f'image {args.image.name}' if args.image else '', f'music {track.name}' if track else '',
+    extras = ', '.join(filter(None, [args.format, encoder, f'image {args.image.name}' if args.image else '', f'music {track.name}' if track else '', f'host music {host_track.name}' if host_track else '',
                                      'title card' if args.title_card else '',
                                      'progress bar' if args.progress_bar else '']))
     print(f'Saved {output}; {phrase_count} caption phrases; {duration:.3f} seconds; '

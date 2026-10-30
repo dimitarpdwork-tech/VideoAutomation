@@ -116,7 +116,7 @@ function PersonaEditor({data, busy, action}) {
         settings: {...c, host_voice_clip: host, persona: {...draft, asides: 'none', voice_clip: draft.voice_clip || (c.voice_engine === 'chatterbox' ? c.voice_clip || undefined : undefined)}}})}>Save persona</button>
       {saved.identity && <button type="button" disabled={busy} onClick={() => action({action: 'settings', settings: {...c, persona: null}})}>Remove persona</button>}
       <OpenFolder which="channel" label="Channel folder (host scene)" action={action} busy={busy}/>
-      <small>Every story opens with its narrator introducing themselves. With a host voice, full videos cut to the channel's scene while the host welcomes listeners after the hook and signs off at the end, in a different voice from the story. Your own scene: put an image or short video named host_scene (e.g. host_scene.mp4) in the channel's folder. Shorts and teasers stay pure story.</small>
+      <small>Every story opens with its narrator introducing themselves. With a host voice, full videos cut to the channel's scene while the host welcomes listeners after the hook and signs off at the end, in a different voice from the story. Your own scene: put an image or short video named host_scene (e.g. host_scene.mp4) in the channel's folder. Music: horror channels get a quiet built-in tension drone under the story and a music box under the host; your own tracks in the channel folder's music/story and music/host replace them (volume: Settings → Music volume). Shorts and teasers stay pure story.</small>
     </div>
   </details>;
 }

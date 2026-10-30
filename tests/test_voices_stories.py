@@ -853,3 +853,54 @@ class HostVoiceTests(unittest.TestCase):
             self.assertLess(brightness(3.0), 40)           # the dark channel scene
             self.assertGreater(brightness(5.5), 80)        # back to the story
             self.assertFalse(list((folder / 'out').glob('_scene_*')))
+
+
+class MusicTests(unittest.TestCase):
+    """A quiet tension bed under the story, a music box under the host, swapping smoothly."""
+
+    def test_own_tracks_win_and_dark_channels_get_built_in_music(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            with patch.object(produce_batch, 'CHANNELS', root / 'channels'), patch.object(produce_batch, 'ROOT', root), \
+                    patch.object(produce_batch, 'SHARED', root / 'shared'), \
+                    patch('music_synth.story_drone', return_value=[0.0, 0.1] * 100), \
+                    patch('music_synth.host_box', return_value=[0.1, 0.0] * 100):
+                horror = {'id': 'night', 'story_category': 'Horror fiction', 'music_volume': 0.1}
+                story, host = produce_batch.music_for(horror)
+                self.assertEqual((story.name, host.name), ('story_music.wav', 'host_box.wav'))
+                self.assertTrue((root / 'channels/night/music/host').is_dir())     # shows where your own tracks go
+                (root / 'channels/night/music/host/jingle.mp3').write_bytes(b'x')
+                self.assertEqual(produce_batch.music_for(horror)[1], root / 'channels/night/music/host')
+                self.assertEqual(produce_batch.music_for({**horror, 'music_volume': 0}), (None, None))
+                self.assertEqual(produce_batch.music_for({'id': 'd', 'story_category': 'Drama', 'music_volume': 0.1}), (None, None))
+
+    def test_host_music_only_plays_around_the_host(self):
+        graph = make_video.audio_filter(0.1, True, 'natural', 2, 5, [[4.0, 6.0]])
+        self.assertIn('[5:a]', graph)
+        self.assertIn('adelay=2800:all=1', graph)                               # starts 1.2 s before the host
+        self.assertIn("volume='1-(1-clip(", graph)
+        self.assertNotIn('[5:a]', make_video.audio_filter(0.1, True, 'natural', 2, 5, []))   # Shorts: story music only
+
+    def test_render_with_both_music_layers(self):
+        import music_synth
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            with patch.object(music_synth, 'story_drone', lambda: [math.sin(i / 40) for i in range(24000 * 3)]), \
+                    patch.object(music_synth, 'host_box', lambda: [math.sin(i / 7) for i in range(24000 * 2)]):
+                drone, box = music_synth.ensure(folder / 'music')
+            narration = folder / 'n'
+            narration.mkdir()
+            with wave.open(str(narration / 'narration.wav'), 'wb') as audio:
+                audio.setnchannels(1); audio.setsampwidth(2); audio.setframerate(24000)
+                audio.writeframes(b''.join(struct.pack('<h', int(4000 * math.sin(i / 9))) for i in range(24000 * 6)))
+            channels.write_json(narration / 'timings.json', [{'word': 'Hi.', 'start': 0.2, 'end': 0.6}])
+            channels.write_json(narration / 'metadata.json', {'duration_seconds': 6.0, 'host_spans': [[2.0, 4.0]]})
+            from PIL import Image
+            Image.new('RGB', (1920, 1080), (90, 90, 90)).save(folder / 'photo.jpg')
+            result = subprocess.run([sys.executable, str(Path(make_video.__file__)), '--narration', str(narration),
+                                     '--image', str(folder / 'photo.jpg'), '--destination', str(folder / 'out'),
+                                     '--format', 'landscape', '--filename', 'x.mp4', '--music', str(drone),
+                                     '--host-music', str(box), '--music-volume', '0.1', '--voice-character', 'tape',
+                                     '--encoder', 'libx264'], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr[-800:])
+            self.assertIn('host music host_box.wav', result.stdout)
