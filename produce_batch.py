@@ -23,6 +23,7 @@ import delivery
 import image_picker
 import metadata as video_metadata
 import narrate
+import persona as narrator_persona
 import speech
 import variety
 import voice_worker
@@ -337,9 +338,15 @@ def produce_short(item, config, channel_paths, batch, dest):
 def produce_full(item, config, channel_paths, batch, dest):
     """Narrate and render the horizontal full video plus its thumbnail."""
     source = channel_paths['stories'] / item['story']
-    ensure_image(item, config, read_json(source))
+    story = read_json(source)
+    ensure_image(item, config, story)
     base = channel_paths['narrations'] / source.stem / batch
-    full_meta = run_narration(source, base / 'full', config, item.get('voice'), item.get('voice_clip'), item)
+    narrated = source
+    if story.get('intro') or story.get('outro'):
+        # Cold open, the host's intro, the story, the host's sign-off (see persona.py).
+        narrated = base / 'full_story.json'
+        write_json(narrated, {**story, 'text': narrator_persona.framed_text(story)})
+    full_meta = run_narration(narrated, base / 'full', config, item.get('voice'), item.get('voice_clip'), item)
     limit = config.get('max_full_minutes', 15) * 60
     if full_meta['duration_seconds'] > limit:
         raise NeedsReview(f"Full narration is {full_meta['duration_seconds'] / 60:.1f} min; the limit is "

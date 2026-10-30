@@ -50,7 +50,9 @@ ATTEMPTS = 3
 MIN_SPW, MAX_SPW = 0.16, 1.05
 # How each cue shifts expressiveness (Chatterbox "exaggeration") and pacing (cfg_weight:
 # lower is slower and more deliberate).
-STYLE = {None: (0.0, 0.5), 'tense': (0.25, 0.3), 'whisper': (-0.2, 0.3), 'urgent': (0.4, 0.6), 'calm': (-0.15, 0.45)}
+STYLE = {None: (0.0, 0.5), 'tense': (0.25, 0.3), 'whisper': (-0.2, 0.3), 'urgent': (0.4, 0.6), 'calm': (-0.15, 0.45),
+         'aside': (-0.2, 0.4)}
+ASIDE_GAIN = 0.85       # the host stepping out of the story: a touch quieter and more matter-of-fact
 WHISPER_GAIN = 0.5       # about -6 dB: Chatterbox cannot whisper, so hushed lines are quieter
 SAMPLE_TEXT = (
     "The Night Shift. I took the job because it paid double and nobody else wanted it. "
@@ -340,12 +342,14 @@ class Narrator:
         offset = 0.0
         plan = pieces(script)
         for number, (cue, text, pause) in enumerate(plan, 1):
-            if pause and parts:
+            if (pause or (cue == 'aside' and (number == 1 or plan[number - 2][0] != 'aside'))) and parts:
                 parts.append(silence(PAUSE_SECONDS))
                 offset += PAUSE_SECONDS
             wav, timings, warning = self.speak(text, cue, expressiveness, seed + number)
             if cue == 'whisper':
                 wav = wav * WHISPER_GAIN
+            elif cue == 'aside':
+                wav = wav * ASIDE_GAIN
             if warning:
                 warnings.append(warning)
             for word, (start, end) in zip(text.split(), timings):

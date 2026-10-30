@@ -192,6 +192,15 @@ Choose per channel in **Settings → Voice and look**.
   narrates with that voice. An invented voice belongs to nobody, so it is
   yours to use. Install it once with `setup_voice_designer.cmd` /
   `./setup_voice_designer.sh` (about 7 GB; needs an NVIDIA card with 8 GB).
+- **Narrator persona** makes voice, words and delivery one character. Under
+  **Narrator → Narrator persona**, write (or draft from the designed voice's
+  description with one click) who the host is, how they talk, how they open
+  and sign off, and whether they make asides. Every new story is then written
+  for that character: its first-person narrator matches the voice's gender and
+  age, the wording follows the host's style, and full videos run cold open
+  (the hook), the host's intro, the story, the host's sign-off. Up to two or
+  five `[aside]` remarks are read a touch quieter. Shorts and teasers stay pure
+  story.
 - **Voice character** gives a channel a signature sound on every video:
   Natural, Deep & close, Uncanny (a faint second voice an octave below), Old
   tape, or Empty room. **Hear my narrator with each** renders your narrator

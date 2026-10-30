@@ -71,6 +71,49 @@ function VoiceDesigner({data, busy, action}) {
   </details>;
 }
 
+function PersonaEditor({data, busy, action}) {
+  const c = data.channel;
+  const saved = c.persona || {};
+  const [draft, setDraft] = useState(saved), [describe, setDescribe] = useState(''), [open, setOpen] = useState(!saved.identity);
+  const key = JSON.stringify(saved);
+  useEffect(() => setDraft(c.persona || {}), [key]);
+  const set = (k, v) => setDraft({...draft, [k]: v});
+  const voiceDescription = data.voiceDescriptions?.[c.voice_clip];
+  const mismatch = saved.voice_clip && c.voice_engine === 'chatterbox' && saved.voice_clip !== c.voice_clip;
+  const field = (k, label, rows, placeholder) => <label className={rows ? 'wide' : ''}>{label}
+    {rows ? <textarea rows={rows} maxLength={600} value={draft[k] || ''} placeholder={placeholder} onChange={e => set(k, e.target.value)}/>
+      : <input maxLength={80} value={draft[k] || ''} placeholder={placeholder} onChange={e => set(k, e.target.value)}/>}</label>;
+  return <details className="designer-block persona-block" open={open} onToggle={e => setOpen(e.currentTarget.open)}>
+    <summary><strong>Narrator persona</strong> <small>{saved.identity ? `${saved.name || 'Host'}: every story is written for this character.` : 'Not set: stories are written without a host character.'}</small></summary>
+    {mismatch && <p className="reason">This persona was written for another narrator ({saved.voice_clip}). Draft a new one for the current voice, or keep it if it still fits.</p>}
+    <div className="persona-actions">
+      {voiceDescription ? <button type="button" disabled={busy || !data.hasApiKey || data.generation?.running}
+        onClick={() => action({action: 'draft-persona', clip: c.voice_clip})}>{data.generation?.running ? 'Writing…' : '✨ Draft from this narrator\'s voice'}</button>
+        : <><input aria-label="Describe the narrator" value={describe} maxLength={500} onChange={e => setDescribe(e.target.value)} placeholder="Describe the narrator, e.g. an old caretaker with a deep, hoarse voice"/>
+          <button type="button" disabled={busy || !data.hasApiKey || describe.trim().length < 10} onClick={() => action({action: 'draft-persona', description: describe})}>✨ Draft persona</button></>}
+      {!data.hasApiKey && <small>Needs the Claude API key (Settings).</small>}
+    </div>
+    <div className="persona-grid">
+      {field('name', 'Name (behind the scenes)', 0, 'The Caretaker')}
+      <label>Narrator of the stories<select value={draft.gender || 'any'} onChange={e => set('gender', e.target.value)}>
+        <option value="any">Any</option><option value="male">Male (matches a male voice)</option><option value="female">Female (matches a female voice)</option></select></label>
+      <label>Narrator's age<input maxLength={12} value={draft.age || ''} placeholder="50-75" onChange={e => set('age', e.target.value)}/></label>
+      {field('identity', 'Who they are', 2, 'An old caretaker who has looked after the same empty building for forty years.')}
+      {field('speech', 'How they talk', 3, 'Short, plain sentences. Calm, dry, never dramatic. Says "now" before something bad happens. Never swears, never jokes.')}
+      {field('intro', 'How they open (after the hook)', 2, 'Quiet welcome, e.g. "Come in. Leave the light off. This one happened on a farm…"')}
+      {field('outro', 'How they sign off', 2, 'Always ends with "Leave the light off."')}
+      <label>Asides during the story<select value={draft.asides || 'rare'} onChange={e => set('asides', e.target.value)}>
+        <option value="none">None: never interrupts</option><option value="rare">Rare: up to 2 short remarks</option><option value="some">Some: up to 5</option></select></label>
+    </div>
+    <div className="persona-actions">
+      <button type="button" className="primary" disabled={busy || !(draft.identity || '').trim()} onClick={() => action({action: 'settings',
+        settings: {...c, persona: {...draft, voice_clip: draft.voice_clip || (c.voice_engine === 'chatterbox' ? c.voice_clip || undefined : undefined)}}})}>Save persona</button>
+      {saved.identity && <button type="button" disabled={busy} onClick={() => action({action: 'settings', settings: {...c, persona: null}})}>Remove persona</button>}
+      <small>Applies to stories generated from now on. Full videos open cold on the hook, then the host's intro; Shorts and teasers stay pure story.</small>
+    </div>
+  </details>;
+}
+
 // Lives on the main page, so voices can be compared and chosen without opening Settings.
 function VoiceSamples({data, busy, action}) {
   const samples = data?.voiceSamples ?? [];
@@ -99,6 +142,7 @@ function VoiceSamples({data, busy, action}) {
       <button type="button" disabled={busy || using(s)} onClick={() => choose(s)}>{using(s) ? '✓ Selected' : 'Use this voice'}</button></li>)}</ul>}
     {!samples.length && !data.voices?.running && <small>No samples yet: click “Make voice samples” (3–6 minutes the first time).</small>}
     <VoiceCharacter data={data} busy={busy} action={action} sample={samples.find(using)}/>
+    <PersonaEditor data={data} busy={busy} action={action}/>
     <VoiceDesigner data={data} busy={busy} action={action}/>
     <small>Your own clips: 10–30 seconds of clean speech you have the rights to (WAV or MP3) in the Narrator clips folder, then make the samples again.</small>
     <Log title="Voice samples" job={data.voices}/>

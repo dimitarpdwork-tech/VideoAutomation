@@ -132,7 +132,7 @@ async function config(id = 'main') {
 const base = id => (id === 'main' ? root : path.join(root, 'channels', id));
 const limits = c => (['funnel', 'long'].includes(c.video_format) ? [c.full_min_words, c.full_max_words] : [c.min_words, c.max_words]);
 // Delivery cues such as [pause] are not spoken words (see delivery.py).
-const countWords = text => ((text || '').replace(/\[\s*(?:pause|tense|whisper|urgent|calm)\s*\]/gi, ' ').match(WORDS) || []).length;
+const countWords = text => ((text || '').replace(/\[\s*(?:pause|tense|whisper|urgent|calm|aside)\s*\]/gi, ' ').match(WORDS) || []).length;
 
 // Close to Python's casefold() + split(): enough for display; production re-checks.
 function fingerprint(text) {
@@ -296,6 +296,11 @@ export async function snapshot(id = 'main') {
   const designerInstalled = await exists(python('.venv-design'));
   const voiceDesigns = (await readJson(path.join(DESIGNS_DIR, 'index.json'), [])).filter(d => DESIGN_FILE.test(d.file || '')).slice(-9).reverse();
   const characterPreview = await readJson(path.join(SAMPLES_DIR, 'characters.json'), null);
+  const voiceDescriptions = {};
+  for (const clip of voiceClips) {
+    const sidecar = await readJson(path.join(VOICES_DIR, clip.replace(/\.[a-z0-9]+$/i, '.json')), null).catch(() => null);
+    if (sidecar?.description) voiceDescriptions[clip] = sidecar.description;
+  }
   const musicFiles = (await files(path.join(root, 'music'))).filter(f => f.isFile() && /\.(mp3|m4a|aac|wav|ogg|flac)$/i.test(f.name)).length;
   const topPerformers = queue.filter(v => v.insights?.viewCount).sort((a, b) => b.insights.viewCount - a.insights.viewCount).slice(0, 5)
     .map(v => ({title: v.title, kind: v.kind, views: v.insights.viewCount, videoId: v.videoId, watched: v.insights.averageViewPercentage ?? null}));
@@ -304,7 +309,7 @@ export async function snapshot(id = 'main') {
     channel: {...selected, connected, token}, channels: profiles, presets: Object.keys(presets), grades, formats,
     backgroundFiles, eligibleStories: eligible, generatedStories, reviewStories: setAside, conceptSources,
     hasPexelsKey, voiceClips, voiceSamples, voiceInstalled, voices: view(voiceJob), tiktok: tiktok.slice(-30),
-    designerInstalled, voiceDesigns, designs: view(designJob), characterPreview, voiceCharacters: (await schema()).voice_characters ?? ['natural'],
+    designerInstalled, voiceDesigns, designs: view(designJob), characterPreview, voiceDescriptions, voiceCharacters: (await schema()).voice_characters ?? ['natural'],
     imageMode: selected.background_mode === 'image',
     related, hasApiKey, musicFiles, topPerformers, reviewItems, failed: failed.slice(-20),
     stats: {stories, backgrounds: backgroundFiles.length, total: queue.length,
@@ -477,6 +482,17 @@ export async function saveSettings(id, values) {
   for (const key of ['voice_clip', 'voice_clip_male', 'voice_clip_female']) if (v[key] && !CLIP_FILE.test(v[key])) fail('Narrator clip: choose a file from the voices folder.');
   if (!['standard', 'turbo'].includes(v.chatterbox_model)) fail('Choose a Chatterbox model.');
   const characters = (await schema()).voice_characters ?? ['natural'];
+  const p = v.persona;
+  if (p !== null && p !== undefined) {
+    if (typeof p !== 'object' || Array.isArray(p)) fail('Persona: invalid.');
+    for (const key of ['name', 'identity', 'speech', 'intro', 'outro', 'voice_description']) {
+      if (p[key] !== undefined && (typeof p[key] !== 'string' || p[key].length > 600 || /[<>]/.test(p[key]))) fail('Persona: each field under 600 characters, without < or >.');
+    }
+    if (p.asides !== undefined && !['none', 'rare', 'some'].includes(p.asides)) fail('Persona: asides must be none, rare or some.');
+    if (p.gender !== undefined && !['male', 'female', 'any'].includes(p.gender)) fail('Persona: choose male, female or any.');
+    if (p.age !== undefined && !/^[0-9\- ]{0,12}$/.test(p.age)) fail('Persona: age like 50-75.');
+    if (p.voice_clip && !CLIP_FILE.test(p.voice_clip)) fail('Persona: invalid narrator clip.');
+  }
   if (!characters.includes(v.voice_character ?? 'natural')) fail('Choose a voice character.');
   if (!Number.isFinite(v.expressiveness) || v.expressiveness < 0.25 || v.expressiveness > 1.5) fail('Expressiveness must be between 0.25 and 1.5.');
   if (!['clips', 'image'].includes(v.background_mode)) fail('Choose a background type.');
@@ -493,6 +509,8 @@ export async function saveSettings(id, values) {
     image_keywords: v.image_keywords.map(k => k.trim()).filter(Boolean),
     tiktok_hashtags: v.tiktok_hashtags.map(t => (t.startsWith('#') ? t : '#' + t)),
     voice_character: v.voice_character ?? 'natural',
+    persona: p && (p.identity || '').trim() ? Object.fromEntries(['name', 'identity', 'speech', 'intro', 'outro', 'asides', 'gender', 'age',
+      'voice_clip', 'voice_description'].filter(k => p[k] !== undefined && p[k] !== null).map(k => [k, typeof p[k] === 'string' ? p[k].trim() : p[k]])) : null,
   };
   for (const key of ['credit_source', 'clean_language', 'title_card', 'progress_bar', 'require_review']) clean[key] = v[key] !== false;
   const keys = ['voice', 'voice_male', 'voice_female', 'speed', 'period_pause', 'caption_style', 'min_words', 'max_words', 'backgrounds',
@@ -501,7 +519,7 @@ export async function saveSettings(id, values) {
     'full_description_template', 'fiction_note', 'clean_language', 'title_card', 'title_card_seconds', 'progress_bar', 'music_volume',
     'generator_model', 'story_category', 'require_review', 'max_uploads_per_day', 'caption_font', 'caption_color', 'phrase_color', 'color_grade',
     'voice_engine', 'voice_clip', 'voice_clip_male', 'voice_clip_female', 'chatterbox_model', 'expressiveness', 'background_mode',
-    'image_keywords', 'collected_stories', 'long_target_words', 'tiktok_part_seconds', 'tiktok_hashtags', 'voice_character'];
+    'image_keywords', 'collected_stories', 'long_target_words', 'tiktok_part_seconds', 'tiktok_hashtags', 'voice_character', 'persona'];
   await config(id);
   // Merge into the file as it is now: a sign-in finishing meanwhile keeps its channel binding.
   await withJsonLock(path.join(root, 'channels', id, 'config.json'), current => {
@@ -671,6 +689,25 @@ export async function keepDesign(id, file, name) {
   const sampling = await exists(python('.venv-voice'));
   if (sampling) start('voice_samples.py', ['--only', stem], voiceJob, true);
   return {clip: stem + '.wav', sampling};
+}
+
+// Draft the narrator persona from a designed voice's description (Claude API).
+export async function draftPersona(id, clip, description) {
+  await config(id);
+  if (!(process.env.ANTHROPIC_API_KEY || await exists(KEY_FILE()))) throw Error('Add your Claude API key in Settings first.');
+  if (anyJobRunning(id)) throw Error('Another job is running. Wait for it to finish.');
+  let args;
+  if (clip) {
+    if (!CLIP_FILE.test(clip)) throw Error('Invalid narrator clip.');
+    args = ['--channel', id, '--clip', clip];
+  } else {
+    description = typeof description === 'string' ? description.replace(/\s+/g, ' ').trim() : '';
+    if (description.length < 10 || description.length > 500) throw Error('Describe the narrator in 10–500 characters.');
+    args = ['--channel', id, '--description', description];
+  }
+  generation.channel = id;
+  start('persona.py', args, generation);
+  return {started: true};
 }
 
 // Hear the current narrator through every voice character (takes seconds).

@@ -1,6 +1,6 @@
 import {createProfile, connectChannel, cancelConnection, produce, saveSettings, addStory, preschedule, generateStories,
   autopilot, saveApiKey, markRelatedDone, review, editTitle, makeVoiceSamples, exportTikTok, savePexelsKey, openFolder,
-  designVoice, keepDesign, characterPreviews,
+  designVoice, keepDesign, characterPreviews, draftPersona,
   isLocalRequest} from '../../../lib/studio';
 
 const actions = {
@@ -24,6 +24,7 @@ const actions = {
   'design-voice': body => designVoice(body.channel, body.description, body.count),
   'keep-design': body => keepDesign(body.channel, body.file, body.name),
   'character-previews': body => characterPreviews(body.channel, body.sample),
+  'draft-persona': body => draftPersona(body.channel, body.clip, body.description),
 };
 
 export async function POST(request) {

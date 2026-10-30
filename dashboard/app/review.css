@@ -61,3 +61,9 @@ tr.clickable{cursor:pointer}tr.clickable:hover{background:#fafaf6}
 .designer-block>button.primary{align-self:flex-start}
 .keep{display:flex;gap:6px;align-items:center}.keep input{width:150px;font-size:11px!important}
 .sample-list li>span:empty{display:block}
+.persona-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.persona-grid label{display:flex;flex-direction:column;gap:5px;font-size:11px;color:#5f6657}.persona-grid .wide{grid-column:1/-1}
+.persona-grid textarea,.persona-grid input,.persona-grid select{font:inherit;font-size:12px}
+.persona-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.persona-actions input{flex:1;min-width:240px}
+.persona-actions small{font-size:10px;color:#5f6657}
+@media(max-width:700px){.persona-grid{grid-template-columns:1fr}}
