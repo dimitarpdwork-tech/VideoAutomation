@@ -19,7 +19,8 @@ SAMPLES = SHARED / 'voice_samples'
 
 
 def render(source, character, target):
-    graph = make_video.voice_character(character, '[0:a]', '[voice]') + ';[voice]loudnorm=I=-16:TP=-1.5:LRA=11[a]'
+    graph = (make_video.voice_character(character, '[0:a]', '[voice]')
+             + f';[voice]{make_video.CLEAN},loudnorm=I=-16:TP=-1.5:LRA=11,{make_video.CLEAN}[a]')
     subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-hide_banner', '-loglevel', 'error', '-y', '-i', str(source),
                     '-filter_complex', graph, '-map', '[a]', '-ar', '48000', '-c:a', 'pcm_s16le', str(target)], check=True)
 

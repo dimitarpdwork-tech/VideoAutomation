@@ -329,6 +329,14 @@ def render(narration, item, config, dest, filename, layout):
     if (ROOT / 'music').is_dir() and config.get('music_volume', 0) > 0:
         command += ['--music', str(ROOT / 'music'), '--music-volume', str(config['music_volume'])]
     subprocess.run(command, check=True)
+    output = filename or (item['name'] + ('_yellow_words' if config['caption_style'] == 'words' and layout == 'vertical' else '') + '.mp4')
+    marker = Path(dest) / (output + '.voice-fallback')
+    if marker.exists():
+        warning = (f'The "{marker.read_text(encoding="utf-8").strip()}" voice character failed on this video, so it uses '
+                   'the natural voice. Listen before approving.')
+        if warning not in item.setdefault('variety_warnings', []):
+            item['variety_warnings'].append(warning)
+        marker.unlink(missing_ok=True)
 
 
 _FFMPEG = None

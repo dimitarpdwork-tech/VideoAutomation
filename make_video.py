@@ -282,15 +282,22 @@ def voice_character(character, source='[1:a]', output='[voice]'):
     return base + output
 
 
+# Replaces any NaN or infinite sample with silence. One bad sample from a filter is enough for
+# loudnorm to spread NaN through the rest of the track and for the AAC encoder to refuse it.
+CLEAN = ("aeval=exprs='if(isnan(val(0))+isinf(val(0)),0,val(0))|if(isnan(val(1))+isinf(val(1)),0,val(1))',"
+         "aformat=sample_fmts=fltp:channel_layouts=stereo")
+LOUDNESS = 'loudnorm=I=-14:TP=-1.5:LRA=11'
+
+
 def audio_filter(music_volume, has_music, character='natural'):
     voice = voice_character(character)
     if not has_music:
-        return voice + ';[voice]loudnorm=I=-14:TP=-1.5:LRA=11[a]'
+        return f'{voice};[voice]{CLEAN},{LOUDNESS},{CLEAN}[a]'
     # Gentle ducking: music dips under speech without pumping back up in every pause.
-    return (f'{voice};[voice]asplit[v1][v2];'
+    return (f'{voice};[voice]{CLEAN},asplit[v1][v2];'
             f'[2:a]aresample=48000,aformat=channel_layouts=stereo,volume={music_volume:.3f}[m];'
             f'[m][v1]sidechaincompress=threshold=0.05:ratio=4:attack=20:release=600[duck];'
-            f'[v2][duck]amix=inputs=2:duration=first:normalize=0,loudnorm=I=-14:TP=-1.5:LRA=11[a]')
+            f'[v2][duck]amix=inputs=2:duration=first:normalize=0,{LOUDNESS},{CLEAN}[a]')
 
 
 _ENCODER = None
@@ -392,30 +399,55 @@ def main():
     graph = video_filter(args.format, None if prepared else video_size(background), captions.name, duration,
                          args.progress_bar, args.grade, image_pan(args.format, image_size) if prepared else None,
                          vignette_input)
-    graph += ';' + audio_filter(args.music_volume, bool(track), args.voice_character)
+    video_graph = graph
 
-    def command(chosen):
+    def command(chosen, character):
+        full_graph = video_graph + ';' + audio_filter(args.music_volume, bool(track), character)
         return [imageio_ffmpeg.get_ffmpeg_exe(), '-hide_banner', '-loglevel', 'error', '-y', *inputs,
-                '-filter_complex', graph, '-map', '[v]', '-map', '[a]',
+                '-filter_complex', full_graph, '-map', '[v]', '-map', '[a]',
                 '-t', f'{duration:.3f}', *encoder_args(chosen),
                 '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
                 '-movflags', '+faststart', '-f', 'mp4', str(partial)]
 
+    def silent(path):
+        """True if the rendered audio is (near) silent: a broken voice character cleaned into nothing."""
+        probe = subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-hide_banner', '-i', str(path), '-map', '0:a',
+                                '-af', 'volumedetect', '-f', 'null', '-'], capture_output=True, text=True, errors='replace')
+        found = re.search(r'mean_volume:\s*(-?[\d.]+|-inf) dB', probe.stderr)
+        return bool(found) and (found.group(1) == '-inf' or float(found.group(1)) < -60)
+
+    def attempt(chosen, character):
+        """Run FFmpeg; return its error text ('' on success). The error is shown in the log either way."""
+        result = subprocess.run(command(chosen, character), cwd=destination, stderr=subprocess.PIPE,
+                                text=True, encoding='utf-8', errors='replace')
+        if result.stderr.strip():
+            print(result.stderr.strip()[-3000:], flush=True)
+        return '' if result.returncode == 0 else (result.stderr or f'FFmpeg exit code {result.returncode}')
+
     # Render under a temporary name; a crash never leaves a file that looks finished.
+    character = args.voice_character
+    fallback = destination / (output.name + '.voice-fallback')
+    fallback.unlink(missing_ok=True)
     try:
-        try:
-            subprocess.run(command(encoder), cwd=destination, check=True)
-        except subprocess.CalledProcessError:
-            if encoder == 'libx264':
-                partial.unlink(missing_ok=True)
-                raise
+        error = attempt(encoder, character)
+        if error and character != 'natural' and re.search(r'NaN|Inf|audio frame', error):
+            # The voice character produced audio the encoder rejects: keep the video, with the plain voice.
+            print(f'The "{character}" voice character produced invalid audio; rendering with the natural voice.', flush=True)
+            fallback.write_text(character, encoding='utf-8')
+            character = 'natural'
+            error = attempt(encoder, character)
+        if error and encoder != 'libx264':
             print(f'{encoder} failed; retrying with the CPU encoder.', flush=True)
             encoder = 'libx264'
-            try:
-                subprocess.run(command(encoder), cwd=destination, check=True)
-            except subprocess.CalledProcessError:
-                partial.unlink(missing_ok=True)
-                raise
+            error = attempt(encoder, character)
+        if not error and character != 'natural' and silent(partial):
+            print(f'The "{character}" voice character left the video silent; rendering with the natural voice.', flush=True)
+            fallback.write_text(character, encoding='utf-8')
+            character = 'natural'
+            error = attempt(encoder, character)
+        if error:
+            partial.unlink(missing_ok=True)
+            raise SystemExit(f'Rendering failed: {error.strip().splitlines()[-1][:300]}')
     finally:
         for temporary in (prepared, vignette):
             if temporary:
