@@ -73,8 +73,9 @@ def search_pexels(query, orientation, key):
     results = []
     for photo in json.loads(data).get('photos', []):
         src = photo.get('src') or {}
-        # A web-sized copy (about 2,560 px): originals can be 30-60 MB.
-        size = 'h=2560' if orientation == 'portrait' else 'w=2560'
+        # A compressed 4K copy instead of the 30-60 MB original: 3,840 px wide (about 2,560 tall) is
+        # enough for 1080p and for a sharp vertical crop of the same photo for the teaser Short.
+        size = 'h=3840' if orientation == 'portrait' else 'w=3840'
         url = (src['original'] + ('&' if '?' in src['original'] else '?') + f'auto=compress&cs=tinysrgb&{size}'
                if src.get('original') else src.get('large2x'))
         results.append({'id': f"pexels:{photo['id']}", 'url': url,
