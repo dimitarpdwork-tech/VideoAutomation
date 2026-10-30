@@ -260,7 +260,7 @@ export async function snapshot(id = 'main') {
     }
   }
 
-  let stories = 0, eligible = 0, generatedStories = 0, setAside = 0, conceptSources = 0;
+  let stories = 0, eligible = 0, generatedStories = 0, setAside = 0, conceptSources = 0, latestStory = null;
   const [low, high] = limits(selected);
   const usage = await readJson(path.join(SHARED, 'story_usage.json'), {}), seen = new Set();
   const done = Object.fromEntries(Object.entries(usage).filter(([, row]) => row.status === 'complete'));
@@ -276,8 +276,16 @@ export async function snapshot(id = 'main') {
     const storyId = story.id || file.name.replace(/\.json$/, '');
     const concept = story.text_source === 'post_page' && (selected.collected_stories || 'rewrite') !== 'narrate';
     if (concept && unused && !story.concept_used_by) conceptSources++;
-    if (unused && story.text_source !== 'feed_preview' && !concept && !done[hash] && !doneIds.has(storyId) && !seen.has(hash)
-        && title && title.length <= 100 && !/[<>]/.test(title) && count >= low && count <= high) { eligible++; seen.add(hash); }
+    const fits = unused && story.text_source !== 'feed_preview' && !concept && !done[hash] && !doneIds.has(storyId) && !seen.has(hash)
+        && title && title.length <= 100 && !/[<>]/.test(title) && count >= low && count <= high;
+    if (fits) { eligible++; seen.add(hash); }
+    if (['generated', 'original'].includes(story.text_source)) {
+      const modified = (await fs.stat(path.join(directory, 'stories', file.name))).mtimeMs;
+      const usedName = file.name.endsWith('_used.json') ? file.name : null;
+      if (!latestStory || modified > latestStory.modified) latestStory = {file: file.name, title, words: count, modified,
+        text: story.text.replace(/\[[a-z]+\]\s*/g, '').slice(0, 1500), ready: !!fits, used: !!usedName || !!done[hash] || doneIds.has(storyId),
+        tooLong: count > high, tooShort: count < low};
+    }
   }
   const backgroundFiles = (await files(path.join(root, 'backgrounds'))).filter(f => f.isFile() && /\.mp4$/i.test(f.name)).map(f => f.name);
   const profiles = [];
@@ -307,7 +315,7 @@ export async function snapshot(id = 'main') {
   const {presets, grades, formats} = await schema();
   return {
     channel: {...selected, connected, token}, channels: profiles, presets: Object.keys(presets), grades, formats,
-    backgroundFiles, eligibleStories: eligible, generatedStories, reviewStories: setAside, conceptSources,
+    backgroundFiles, eligibleStories: eligible, latestStory, generatedStories, reviewStories: setAside, conceptSources,
     hasPexelsKey, voiceClips, voiceSamples, voiceInstalled, voices: view(voiceJob), tiktok: tiktok.slice(-30),
     designerInstalled, voiceDesigns, designs: view(designJob), characterPreview, voiceDescriptions, voiceCharacters: (await schema()).voice_characters ?? ['natural'],
     imageMode: selected.background_mode === 'image',
@@ -402,8 +410,18 @@ export async function uploadNext(id = 'main') {
   return {started: true};
 }
 
-export async function produce(id, count) {
+export async function produce(id, count, story) {
   const data = await snapshot(id);
+  if (story !== undefined && story !== null) {
+    if (typeof story !== 'string' || !/^[A-Za-z0-9_.-]{1,120}\.json$/.test(story) || /_(used|review)\.json$/.test(story)) throw Error('Choose an unused story.');
+    if (!(await exists(path.join(base(id), 'stories', story)))) throw Error('That story was not found.');
+    if (data.channel.voice_engine === 'chatterbox' && !data.voiceInstalled) throw Error('The Chatterbox voice is not installed. Run setup_voice first.');
+    if (voiceJob.running || designJob.running) throw Error('A voice is still being made. Wait for it to finish.');
+    if (production.running || generation.running) throw Error('Something is already running. Wait for it to finish.');
+    production.channel = id;
+    start('produce_batch.py', ['--channel', id, '--count', '1', '--story', story], production, true);
+    return {started: true};
+  }
   if (!Number.isInteger(count) || count < 1 || count > 100) throw Error('Choose between 1 and 100 videos.');
   if (!data.backgroundFiles.length && !data.imageMode) throw Error('Add at least one background video to the backgrounds folder first, or set the channel to use one image per story.');
   if (data.channel.voice_engine === 'chatterbox' && !data.voiceInstalled) throw Error('This channel uses the Chatterbox voice, which is not installed. Run setup_voice, or choose Kokoro in Settings.');
@@ -672,7 +690,7 @@ export async function designVoice(id, description, count) {
 }
 
 // Keep a designed take as a narrator clip, then make its Chatterbox sample.
-export async function keepDesign(id, file, name) {
+export async function keepDesign(id, file, name, role) {
   await config(id);
   if (!DESIGN_FILE.test(file || '')) throw Error('Choose a voice take.');
   const slug = (typeof name === 'string' ? name : '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
@@ -686,9 +704,26 @@ export async function keepDesign(id, file, name) {
   if (await exists(path.join(VOICES_DIR, stem + '.wav'))) throw Error('A narrator with that name already exists; choose another name.');
   await fs.copyFile(path.join(DESIGNS_DIR, file), path.join(VOICES_DIR, stem + '.wav'));
   await writeJson(path.join(VOICES_DIR, stem + '.json'), {description: take.description, seed: take.seed, from: file});
+  if (role) await setVoice(id, role, stem + '.wav');
   const sampling = await exists(python('.venv-voice'));
   if (sampling) start('voice_samples.py', ['--only', stem], voiceJob, true);
   return {clip: stem + '.wav', sampling};
+}
+
+// The simple page's two voice slots: the story narrator and the intro host ('' = no host).
+export async function setVoice(id, role, clip) {
+  await config(id);
+  if (!['narrator', 'host'].includes(role)) throw Error('Choose narrator or host.');
+  clip = clip || '';
+  if (clip && !CLIP_FILE.test(clip)) throw Error('Choose a voice from the list.');
+  if (clip && !(await exists(path.join(VOICES_DIR, clip)))) throw Error('That voice file is missing from the voices folder.');
+  if (role === 'narrator' && !clip) throw Error('The story needs a narrator voice.');
+  await withJsonLock(path.join(root, 'channels', id, 'config.json'), current => {
+    if (role === 'narrator') { current.voice_engine = 'chatterbox'; current.voice_clip = clip; }
+    else current.host_voice_clip = clip;
+    if (current.voice_clip && current.host_voice_clip === current.voice_clip) current.host_voice_clip = '';
+  }, {});
+  return {saved: true};
 }
 
 // Draft the narrator persona from a designed voice's description (Claude API).

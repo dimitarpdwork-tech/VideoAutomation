@@ -1,59 +1,86 @@
 'use client';
-import {useEffect, useState, useRef} from 'react';
-import ChannelControls from './channel-controls';
-import ReviewPanel from './review-panel';
+// Simple mode: voice, story, video. Everything else lives in /advanced.
+import {useEffect, useRef, useState} from 'react';
+import {WorkingBar, lastLine} from './working';
 
-const time = seconds => { const rounded = Math.round(seconds || 0); return `${Math.floor(rounded / 60)}:${String(rounded % 60).padStart(2, '0')}`; };
-const mediaUrl = (channel, video) => `/api/media?channel=${encodeURIComponent(channel)}&batch=${encodeURIComponent(video.batch)}&file=${encodeURIComponent(video.file)}`;
-const STATUS = {review: 'Waiting for review', rejected: 'Rejected', ready: 'Approved', waiting: 'After full video', uploaded: 'Uploaded',
-  scheduled: 'Scheduled', used: 'Used', checking: 'Checking upload', resumable: 'Will resume'};
-const VISIBILITY = {public: 'Public', unlisted: 'Unlisted', private: 'Private'};
+const sampleUrl = file => '/api/voice-sample?file=' + encodeURIComponent(file);
+const mediaUrl = (channel, batch, file) => `/api/media?channel=${encodeURIComponent(channel)}&batch=${encodeURIComponent(batch)}&file=${encodeURIComponent(file)}`;
+const pretty = clip => clip ? clip.replace(/\.[a-z0-9]+$/i, '').replace(/^designed_/, '').replace(/_/g, ' ') : '';
+const minutes = seconds => `${Math.floor((seconds || 0) / 60)}:${String(Math.round(seconds || 0) % 60).padStart(2, '0')}`;
 
-function Icon({type, size = 20}) {
-  const shapes = {play: <path d="m9 5 11 7-11 7Z"/>, upload: <><path d="M12 16V3m-5 5 5-5 5 5"/><path d="M4 15v5h16v-5"/></>,
-    film: <><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7 4v16M17 4v16M3 9h4m-4 6h4m10-6h4m-4 6h4"/></>,
-    check: <path d="m5 12 4 4L20 5"/>, story: <><path d="M7 3h9l4 4v14H4V3Z"/><path d="M8 11h8m-8 4h6"/></>, arrow: <path d="M5 12h14m-5-5 5 5-5 5"/>,
-    eye: <><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></>};
-  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{shapes[type] || shapes.play}</svg>;
+const ROLES = {
+  narrator: {title: 'Story narrator', note: 'Tells the story. Dark and calm works best for horror.',
+    description: 'A deep, slow male voice in his fifties, slightly hoarse, speaking quietly and close to the microphone, calm and matter-of-fact, like a man telling the one story he never tells anyone.'},
+  host: {title: 'Intro host', note: 'Welcomes listeners after the hook and signs off at the end. A cheerful voice makes a nice contrast.',
+    description: 'A warm, upbeat male radio host in his forties, bright and friendly with a smile you can hear, clear American accent, medium pitch, relaxed and welcoming, like a late-night DJ who is genuinely glad you tuned in. Crisp diction, clean close-microphone sound.'},
+};
+
+function Step({number, title, done, children}) {
+  return <section className={'simple-step' + (done ? ' done' : '')}>
+    <div className="step-number">{done ? '✓' : number}</div>
+    <div className="step-body"><h2>{title}</h2>{children}</div>
+  </section>;
 }
 
-const JOBS = [['generation', 'Writing stories'], ['production', 'Making videos'], ['scheduling', 'Scheduling uploads'],
-  ['upload', 'Uploading'], ['voices', 'Working on voice samples'], ['designs', 'Designing voices']];
-
-// What is running right now, and its latest step, so nothing happens silently.
-function WorkingBar({data}) {
-  const running = JOBS.filter(([key]) => data?.[key]?.running);
-  if (!running.length) return null;
-  return <div className="working-bar" role="status">{running.map(([key, label]) => {
-    const lines = (data[key].log || []).join('').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-    const last = [...lines].reverse().find(l => !/^(Traceback|File |Warning|UserWarning|warnings\.warn)/.test(l)) || 'Starting…';
-    return <div key={key}><span className="pulse"/><strong>{label}{data[key].channel ? ` · ${data.channels?.find(c => c.id === data[key].channel)?.name || data[key].channel}` : ''}</strong><span className="step">{last.slice(0, 160)}</span></div>;
-  })}</div>;
-}
-
-function nextStep(data) {
-  if (!data) return null;
+function VoiceSlot({role, data, busy, act, designing, setDesigning}) {
   const c = data.channel;
-  if (!data.backgroundFiles.length && !data.imageMode) return ['Add a background video', 'Put at least one MP4 you have the rights to use in the backgrounds folder, or switch Settings > Background to one photo per story.'];
-  if (c.voice_engine === 'chatterbox' && !data.voiceInstalled) return ['Install the Chatterbox voice', 'Run setup_voice (it downloads about 3 GB once), or switch Settings > Narration engine to Kokoro.'];
-  if (c.token === 'expired') return ['Reconnect YouTube', 'The Google sign-in for this channel expired. Click "Reconnect channel".'];
-  if (data.reviewItems.length) return [`Review ${data.reviewItems.length} video${data.reviewItems.length === 1 ? '' : 's'}`, 'Watch them below and approve the ones that are good enough to publish.'];
-  if (data.related.length) return [`Link ${data.related.length} teaser${data.related.length === 1 ? '' : 's'} in YouTube Studio`, 'Set each teaser Short\'s Related video so viewers can tap through to the full story.'];
-  if (c.token === 'missing' && data.stats.ready) return ['Connect YouTube', 'Approved videos are waiting; connect the channel to schedule them.'];
-  if (data.stats.ready) return [`Schedule ${data.stats.ready} approved video${data.stats.ready === 1 ? '' : 's'}`, 'Use "Schedule on YouTube" so they publish at your set times.'];
-  if (!data.eligibleStories && data.conceptSources) return ['Generate stories', `${data.conceptSources} collected stories are waiting to be rewritten as originals. Click "Generate stories".`];
-  if (!data.eligibleStories) return ['Add stories', 'Generate stories, write one, or collect some; none fit this channel right now.'];
-  return ['Create the next batch', `${data.eligibleStories} stories are ready to become videos.`];
+  const clip = role === 'narrator' ? (c.voice_engine === 'chatterbox' ? c.voice_clip : '') : c.host_voice_clip;
+  const sample = (data.voiceSamples || []).find(s => s.engine === 'chatterbox' && (s.clip || '') === (clip || ''));
+  const others = (data.voiceClips || []).filter(f => role === 'narrator' ? f !== c.host_voice_clip : f !== c.voice_clip);
+  return <div className="voice-slot">
+    <div className="slot-head"><div><strong>{ROLES[role].title}</strong><small>{ROLES[role].note}</small></div></div>
+    <div className="slot-current">
+      {clip ? <span className="slot-name">{pretty(clip)}</span> : <span className="slot-empty">{role === 'host' ? 'No intro host: the video is only the story' : 'Not chosen yet'}</span>}
+      {clip && (sample ? <audio controls preload="none" src={sampleUrl(sample.file)}/> : <small>{data.voices?.running ? 'Preparing its sample…' : 'No sample to play yet.'}</small>)}
+    </div>
+    <div className="slot-actions">
+      <button type="button" className="big" disabled={busy} onClick={() => setDesigning(designing === role ? null : role)}>
+        {designing === role ? 'Close' : '✨ Create a new voice'}</button>
+      <select aria-label={'Saved voices for ' + ROLES[role].title} value="" disabled={busy}
+        onChange={e => e.target.value && act({action: 'set-voice', role, clip: e.target.value === '-' ? '' : e.target.value}, 'Saved.')}>
+        <option value="">Use a saved voice…</option>
+        {role === 'host' && clip && <option value="-">No intro host</option>}
+        {others.map(f => <option key={f} value={f}>{pretty(f)}</option>)}
+      </select>
+    </div>
+  </div>;
 }
 
-export default function Home() {
+function Designer({role, data, busy, act}) {
+  const [description, setDescription] = useState(ROLES[role].description);
+  useEffect(() => setDescription(ROLES[role].description), [role]);
+  const running = data.designs?.running;
+  const takes = (data.voiceDesigns || []).slice(0, 3);
+  if (!data.designerInstalled) return <p className="simple-note">The voice creator is not installed. Run <code>setup_voice_designer.cmd</code> once in the StoryShortsStudio folder.</p>;
+  return <div className="designer-simple">
+    <h3>New voice for: {ROLES[role].title}</h3>
+    <label>Describe the voice (you can keep this as it is)
+      <textarea rows={3} maxLength={500} value={description} onChange={e => setDescription(e.target.value)}/></label>
+    <button type="button" className="primary big" disabled={busy || running || description.trim().length < 10}
+      onClick={() => act({action: 'design-voice', description, count: 3}, 'Creating 3 voices. About a minute each.')}>
+      {running ? 'Creating voices…' : 'Create 3 voices'}</button>
+    {running && <p className="simple-note">{lastLine(data.designs)}</p>}
+    {!running && takes.length > 0 && <><p className="simple-note">Listen, then pick one:</p>
+      <ul className="takes">{takes.map((d, i) => <li key={d.file}>
+        <strong>Voice {i + 1}</strong>
+        <audio controls preload="none" src={sampleUrl(d.file)}/>
+        <button type="button" className="primary" disabled={busy}
+          onClick={() => act({action: 'keep-design', file: d.file, role,
+            name: `${role === 'host' ? 'Host' : 'Narrator'} ${d.file.slice(7, 15)} ${d.file.slice(16, 20)} ${i + 1}`},
+          `Saved as the ${ROLES[role].title.toLowerCase()}.`)}>Use this voice</button>
+      </li>)}</ul></>}
+    {data.designs?.error && !running && <p className="simple-error">{data.designs.error}</p>}
+  </div>;
+}
+
+export default function Simple() {
   const [channel, setChannelState] = useState('main');
-  // Remember the chosen channel across restarts (per browser; harmless if storage is unavailable).
   useEffect(() => { try { const saved = localStorage.getItem('channel'); if (saved) setChannelState(saved); } catch {} }, []);
   const setChannel = id => { setChannelState(id); try { localStorage.setItem('channel', id); } catch {} };
   const channelRef = useRef(channel); channelRef.current = channel;
-  const [data, setData] = useState(null), [error, setError] = useState(''), [sending, setSending] = useState(false), [filter, setFilter] = useState('all');
-  const [preview, setPreview] = useState(null), [offline, setOffline] = useState(false);
+  const [data, setData] = useState(null), [message, setMessage] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false);
+  const [designing, setDesigning] = useState(null), [fullStory, setFullStory] = useState(false), [offline, setOffline] = useState(false);
+
   async function refresh() {
     try {
       const response = await fetch('/api/dashboard?channel=' + encodeURIComponent(channel), {cache: 'no-store'});
@@ -67,95 +94,105 @@ export default function Home() {
       else setError(e.message);
     }
   }
-  useEffect(() => {
-    refresh();
-    const id = setInterval(refresh, offline ? 10000 : 2500);
-    return () => clearInterval(id);
-  }, [channel, offline]);
-  async function post(url, body) {
-    const response = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({channel, ...body})});
-    const result = await response.json();
-    if (!response.ok) throw Error(result.error);
-    return result;
+  useEffect(() => { refresh(); const id = setInterval(refresh, 2500); return () => clearInterval(id); }, [channel]);
+  useEffect(() => { if (!message) return; const t = setTimeout(() => setMessage(''), 7000); return () => clearTimeout(t); }, [message]);
+
+  async function act(body, done, url = '/api/channels') {
+    setBusy(true); setError(''); setMessage('');
+    try {
+      const response = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({channel, ...body})});
+      const result = await response.json();
+      if (!response.ok) throw Error(result.error);
+      if (body.action === 'keep-design') setDesigning(null);
+      if (done) setMessage(done);
+      await refresh();
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
   }
-  async function upload() { setSending(true); setError(''); try { await post('/api/upload', {}); await refresh(); } catch (e) { setError(e.message); } finally { setSending(false); } }
-  async function markDone(teaserId) { try { await post('/api/channels', {action: 'related-done', teaserId}); await refresh(); } catch (e) { setError(e.message); } }
-  async function insights() { setError(''); try { await post('/api/insights', {connect: !data?.insights.connected}); await refresh(); } catch (e) { setError(e.message); } }
 
-  const stats = data?.stats ?? {}, busy = sending || data?.upload.running || data?.scheduling?.running;
-  const rows = (data?.queue ?? []).filter(v => filter === 'all' || v.status === filter || (filter === 'uploaded' && v.status === 'scheduled'));
-  const log = (data?.upload.log.join('') ?? '') + (data?.scheduling?.log?.join('') ?? '');
-  const progress = [...log.matchAll(/Uploaded (\d+)%/g)].at(-1)?.[1] ?? '0';
-  const c = data?.channel;
-  const status = !c ? ['loading', 'Loading…'] : c.token === 'ok' ? ['ok', `Connected as ${c.youtube_channel_name || c.youtube_channel_id}`]
-    : c.token === 'expired' ? ['bad', 'Sign-in expired'] : ['off', 'YouTube not connected'];
-  const step = nextStep(data);
-  const visibility = VISIBILITY[c?.privacy] ?? 'Public';
-  const uploadReason = !data ? '' : c.token === 'expired' ? 'Reconnect the channel first.' : !c.connected ? 'Connect the channel first.'
-    : !data.next ? (stats.review ? 'Approve videos in Review first.' : 'No approved videos waiting.') : '';
+  if (!data) return <div className="simple-shell"><header><strong className="brand">Story Shorts Studio</strong></header>
+    <main className="simple-main"><p className="simple-note">{offline ? 'The dashboard server is not running. Start it again with start_dashboard.' : 'Loading…'}</p></main></div>;
 
-  return <div className="shell">
-    <header><strong className="brand">Story Shorts Studio</strong><div className={'connection ' + status[0]}><i/>{status[1]}</div></header>
-    <main>
+  const c = data.channel, story = data.latestStory;
+  const narratorSet = c.voice_engine === 'chatterbox' && !!c.voice_clip;
+  const writing = data.generation?.running, making = data.production?.running;
+  // The newest finished video of this channel.
+  const newestBatch = (data.queue || []).reduce((m, v) => (v.batch > m ? v.batch : m), '');
+  const videos = (data.queue || []).filter(v => v.batch === newestBatch);
+  const main = videos.find(v => v.kind === 'full') || videos[0];
+  const teaser = videos.find(v => v.kind === 'teaser');
+  const failed = (data.failed || []).filter(f => f.batch >= newestBatch).at(-1);
+  const productionError = !making && data.production?.exitCode ? data.production.error : '';
+  const reviewItem = main && (data.reviewItems || []).find(r => r.batch === main.batch && r.name === main.item);
+  const approved = main && ['ready', 'waiting', 'uploaded', 'scheduled'].includes(main.status);
+
+  return <div className="simple-shell">
+    <header><strong className="brand">Story Shorts Studio</strong>
+      <div className="simple-head-right">
+        {(data.channels || []).length > 1 && <select aria-label="Channel" value={channel} onChange={e => { setData(null); setChannel(e.target.value); }}>
+          {data.channels.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>}
+        <a className="mode-link" href="/advanced">Advanced settings →</a></div></header>
+    <main className="simple-main">
       <WorkingBar data={data}/>
-      {offline && <div role="alert" className="error">The dashboard server stopped. Start it again with start_dashboard (the window must stay open).</div>}
-      {step && <section className="next-step" aria-label="Next step"><div className="eyebrow">NEXT STEP</div><h1>{step[0]}</h1><p>{step[1]}</p></section>}
-      <ChannelControls data={data} channel={channel} onChannel={id => { setData(null); setChannel(id); }} onRefresh={refresh}/>
-      <ReviewPanel channel={channel} data={data} onRefresh={refresh}/>
-      {data?.related?.length > 0 && <section className="related-panel"><div className="eyebrow">ONE STEP IN YOUTUBE STUDIO</div>
-        <h2>Link each teaser Short to its full video</h2>
-        <p>YouTube does not let apps set a Short's “Related video”, and links in Shorts descriptions are not clickable, so do it once per Short:
-          open it in Studio, choose <b>Related video</b>, pick the full video below, save.</p>
-        <ul>{data.related.map(r => <li key={r.teaser_id}><span className="story-title">{r.title}</span>
-          <a className="refresh" href={`https://studio.youtube.com/video/${r.teaser_id}/edit`} target="_blank" rel="noreferrer">Open Short in Studio ↗</a>
-          <small>Pick: “{r.full_title}”</small><button className="refresh" onClick={() => markDone(r.teaser_id)}>Done</button></li>)}</ul></section>}
-      <section className="stats" aria-label="Production statistics">{[
-        ['Waiting for review', stats.review, 'Nothing uploads until approved', 'eye'], ['Approved', stats.ready, 'Ready to schedule', 'film'],
-        ['Uploaded', stats.uploaded, 'Including scheduled', 'check'], ['Story library', stats.stories, 'Stories in this channel', 'story'],
-      ].map(([label, value, note, icon]) => <article className="stat" key={label}><div className="stat-top">{label}<Icon type={icon}/></div><strong>{value ?? '—'}</strong><small>{note}</small></article>)}</section>
-      <section className="insights-panel"><div className="insights-head"><div><div className="eyebrow">YOUTUBE INSIGHTS</div><h2>How your stories travel</h2>
-        <p>{data?.insights.updatedAt ? 'Updated ' + new Date(data.insights.updatedAt).toLocaleString() + '. Refreshes every 5 minutes.' : 'Views appear here once the channel is connected and videos are uploaded.'}</p></div>
-        {!c?.connected && <button className="refresh" disabled={data?.insights.running} onClick={insights}>{data?.insights.connected ? '↻ Refresh' : 'Connect read-only insights'}</button>}</div>
-        <div className="insights-numbers">{[['Views', 'views'], ['Likes', 'likes'], ['Comments', 'comments']].map(([label, key]) =>
-          <div key={key}><strong>{data?.insights.updatedAt ? data.insights.totals[key].toLocaleString() : '—'}</strong><span>{label}</span></div>)}</div>
-        {data?.insights.error && <p className="insights-note" role="alert">{data.insights.error}</p>}
-        {data?.topPerformers?.length > 0 && <div className="top-list"><div className="eyebrow">TOP PERFORMERS · THE STORY GENERATOR LEARNS FROM THESE</div>
-          <ol>{data.topPerformers.map(v => <li key={v.videoId}><a href={'https://www.youtube.com/watch?v=' + v.videoId} target="_blank" rel="noreferrer">{v.title}</a><span>{v.views.toLocaleString()} views{v.watched != null ? ` · ${Math.round(v.watched)}% watched` : ''} · {v.kind}</span></li>)}</ol></div>}
-        {c?.connected && data?.insights.retention === 'reconnect' && <p className="insights-note">To see how much of each video people watch, click “Reconnect channel” once; the new sign-in includes read-only YouTube Analytics.</p>}
-      </section>
-      {error && <div role="alert" className="error">{error}<button onClick={() => { setError(''); refresh(); }}>Dismiss</button></div>}
-      <div className="workspace"><section className="library"><div className="section-head"><div><h2>Video queue <span>{stats.total ?? 0}</span></h2><p>Click a video to watch it.</p></div>
-        <button className="refresh" onClick={refresh}>↻ Refresh</button></div>
-        <div className="tabs" role="group" aria-label="Filter videos">{[['all', 'All'], ['review', 'Review'], ['ready', 'Approved'], ['waiting', 'Waiting'], ['uploaded', 'Uploaded'], ['rejected', 'Rejected']].map(([id, label]) =>
-          <button key={id} aria-pressed={filter === id} className={filter === id ? 'active' : ''} onClick={() => setFilter(id)}>{label}</button>)}</div>
-        <div className="table-wrap"><table><thead><tr><th>STORY</th><th>LENGTH</th><th>VIEWS</th><th>STATUS</th><th/></tr></thead><tbody>
-          {rows.map(video => <tr key={video.batch + video.name} className="clickable" onClick={() => setPreview(video)}>
-            <td><div className="story-cell"><span className="thumbnail"><Icon type="play" size={16}/></span><div>
-              <div className="story-title" title={video.title}><span className={'kind ' + video.kind}>{({full: 'Full', teaser: 'Teaser', short: 'Short'})[video.kind]}</span>{video.generated && <span className="kind ai">AI story</span>}{video.title}</div>
-              <small>{video.batch.replace('_', ' ')}</small></div></div></td>
-            <td className="duration">{time(video.duration)}</td>
-            <td className="duration">{video.insights?.viewCount?.toLocaleString() ?? '—'}{video.insights?.averageViewPercentage != null && <small className="watched" title="Average percentage watched"> · {Math.round(video.insights.averageViewPercentage)}%</small>}</td>
-            <td><span className={'badge ' + video.status}><i/>{video.status === 'scheduled' ? 'Scheduled ' + new Date(video.publishAt).toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'}) : STATUS[video.status]}</span></td>
-            <td>{video.videoId && <a className="external" onClick={e => e.stopPropagation()} href={'https://www.youtube.com/watch?v=' + video.videoId} target="_blank" rel="noreferrer" aria-label={'View on YouTube: ' + video.title}>↗</a>}</td></tr>)}
-        </tbody></table>{rows.length === 0 && <div className="empty">{data ? 'No videos in this view.' : 'Loading your workspace…'}</div>}</div></section>
-        <aside><section className="publish"><div className="publish-top"><span><Icon type="upload" size={17}/> NEXT UPLOAD</span><span className="public">{visibility}</span></div>
-          <h3>{data?.next?.title ?? (data ? 'No approved videos waiting.' : 'Loading…')}</h3>
-          <p className="publish-description">{data?.next ? (data.next.kind === 'full' ? 'The full video and its thumbnail. Its teaser Short goes next.' : data.next.kind === 'teaser' ? 'The teaser Short; it never goes live before its full video.' : 'One Short with its title, description and hashtags.')
-            : 'For regular publishing, use "Schedule on YouTube" instead of uploading one by one.'}</p>
-          <button className="upload-button" disabled={!!uploadReason || busy} onClick={upload}><Icon type="upload"/>{busy ? 'Uploading…' : `Upload now · ${visibility}`}<Icon type="arrow" size={18}/></button>
-          {uploadReason && <small className="reason">{uploadReason}</small>}
-          {c?.privacy !== 'private' && <small className="reason">Until Google audits your API project, YouTube keeps API uploads private.</small>}
-          {busy && <div className="progress"><div style={{width: progress + '%'}}/></div>}
-          <div className="publish-foot"><Icon type="check" size={14}/> Never uploads the same video twice; interrupted uploads resume.</div></section>
-          <section className="activity"><div className="activity-title"><h2>Upload activity</h2><span className={busy ? 'live' : 'quiet'}>{busy ? '● LIVE' : '● IDLE'}</span></div>
-            {data?.upload.error && <p role="alert" className="job-error">{data.upload.error}</p>}
-            {log ? <pre>{log}</pre> : <div className="activity-empty"><p>Upload progress appears here.</p></div>}</section></aside></div>
-      <footer><span><span className="footer-dot"/> Story Shorts Studio · runs on this computer</span></footer>
+      {message && <div className="simple-toast" role="status">{message}</div>}
+      {error && <div className="simple-error" role="alert">{error} <button onClick={() => setError('')}>OK</button></div>}
+
+      <Step number={1} title="Voices" done={narratorSet}>
+        {!data.voiceInstalled && <p className="simple-error">The narrator voice is not installed. Run <code>setup_voice.cmd</code> once in the StoryShortsStudio folder.</p>}
+        <div className="voice-slots">
+          <VoiceSlot role="narrator" data={data} busy={busy} act={act} designing={designing} setDesigning={setDesigning}/>
+          <VoiceSlot role="host" data={data} busy={busy} act={act} designing={designing} setDesigning={setDesigning}/>
+        </div>
+        {designing && <Designer role={designing} data={data} busy={busy} act={act}/>}
+      </Step>
+
+      <Step number={2} title="Story" done={!!story && !story.used}>
+        <div className="step-actions">
+          <button type="button" className="primary big" disabled={busy || writing || making || !data.hasApiKey}
+            onClick={() => act({action: 'generate', count: 1}, 'Writing a new story. About 1–2 minutes.')}>
+            {writing ? 'Writing…' : '✍️ Write a new story'}</button>
+          {!data.hasApiKey && <small>Add your Claude API key in Advanced settings first.</small>}
+        </div>
+        {writing && <p className="simple-note">{lastLine(data.generation)}</p>}
+        {!writing && data.generation?.exitCode ? <p className="simple-error">{data.generation.error}</p> : null}
+        {story && <article className="story-preview">
+          <h3>{story.title}</h3>
+          <small>{story.words} words · {story.used ? 'already made into a video' : story.ready ? 'ready for a video' : story.tooLong ? 'too long for this channel' : 'too short for this channel'}</small>
+          <p>{fullStory ? story.text : story.text.slice(0, 450) + (story.text.length > 450 ? '…' : '')}</p>
+          {story.text.length > 450 && <button type="button" className="link" onClick={() => setFullStory(!fullStory)}>{fullStory ? 'Show less' : 'Read more'}</button>}
+        </article>}
+        {!story && !writing && <p className="simple-note">No story yet. Click “Write a new story”.</p>}
+      </Step>
+
+      <Step number={3} title="Video" done={approved}>
+        <div className="step-actions">
+          <button type="button" className="primary big" disabled={busy || making || writing || !story?.ready || !narratorSet}
+            onClick={() => act({action: 'produce', count: 1, story: story.file}, 'Making the video. This takes about 10–15 minutes.')}>
+            {making ? 'Making the video…' : '🎬 Make the video'}</button>
+          {!making && story?.used && <small>This story already has a video. Write a new story for the next one.</small>}
+          {!narratorSet && <small>Choose a story narrator in step 1 first.</small>}
+        </div>
+        {making && <p className="simple-note">{lastLine(data.production)}</p>}
+        {!making && (productionError || failed) && <p className="simple-error">{failed?.reason || productionError}</p>}
+        {main && !making && <div className="video-result">
+          <video controls playsInline preload="metadata" src={mediaUrl(channel, main.batch, main.file)} className={main.kind === 'full' ? 'landscape' : 'vertical'}/>
+          <div className="video-side">
+            <h3>{main.title}</h3>
+            <small>{minutes(main.duration)}{teaser ? ' · plus a teaser Short' : ''}</small>
+            {teaser && <details><summary>Watch the teaser Short</summary>
+              <video controls playsInline preload="none" src={mediaUrl(channel, teaser.batch, teaser.file)} className="vertical small"/></details>}
+            {reviewItem?.warnings?.length > 0 && <ul className="warnings">{reviewItem.warnings.map(w => <li key={w}>{w}</li>)}</ul>}
+            {main.status === 'review' && <div className="step-actions">
+              <button type="button" className="primary big" disabled={busy}
+                onClick={() => act({action: 'review', batch: main.batch, names: [main.item], decision: 'approved'}, 'Approved.')}>👍 Approve</button>
+              <button type="button" className="big" disabled={busy}
+                onClick={() => act({action: 'review', batch: main.batch, names: [main.item], decision: 'rejected'}, 'Rejected. Write a new story and make another.')}>👎 Reject</button>
+            </div>}
+            {approved && <p className="simple-ok">{main.status === 'uploaded' || main.status === 'scheduled' ? 'Uploaded to YouTube.' : 'Approved. Upload it from Advanced settings → Upload now or Schedule on YouTube.'}</p>}
+            {main.status === 'rejected' && <p className="simple-note">Rejected. Write a new story and make another.</p>}
+          </div>
+        </div>}
+      </Step>
+      <p className="simple-foot">Everything else (channel settings, music volume, persona wording, schedules, uploads) is in <a href="/advanced">Advanced settings</a>.</p>
     </main>
-    {preview && <div className="modal" role="dialog" aria-modal="true" aria-label={'Preview: ' + preview.title} onClick={() => setPreview(null)}>
-      <div className="modal-body" onClick={e => e.stopPropagation()}>
-        <button className="close" aria-label="Close preview" onClick={() => setPreview(null)}>×</button>
-        <video controls autoPlay playsInline src={mediaUrl(channel, preview)} className={preview.kind === 'full' ? 'landscape' : 'vertical'}/>
-        <h3>{preview.title}</h3><p>{STATUS[preview.status]} · {time(preview.duration)}</p></div></div>}
   </div>;
 }

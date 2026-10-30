@@ -131,7 +131,10 @@ def teaser_text(story, config, cta=None):
 
 def plan_batch(args, config, channel_paths, backgrounds, usage):
     candidates, seen = [], set()
+    only = getattr(args, 'story', None)
     for path in sorted(channel_paths['stories'].glob('*.json')):
+        if only and path.name != only:
+            continue
         try:
             story = json.loads(path.read_text(encoding='utf-8-sig'))
         except (OSError, json.JSONDecodeError) as exc:
@@ -155,6 +158,10 @@ def plan_batch(args, config, channel_paths, backgrounds, usage):
     # Generated and original stories first, then shortest first.
     rank = {'generated': 0, 'original': 0}
     selected = sorted(candidates, key=lambda c: (rank.get(c[2].get('text_source'), 1), c[0], c[1]))[:args.count]
+    if only and not selected:
+        low, high = limits(config)
+        raise RuntimeError(f'The story {only} cannot be used: it was already made into a video, or it is not '
+                           f'{low}-{high} words long. Write a new story.')
     if len(selected) < args.count:
         low, high = limits(config)
         raise RuntimeError(f'Only {len(selected)} eligible complete, unused stories of {low}-{high} words; '
@@ -562,6 +569,7 @@ def main():
     parser.add_argument('--count', type=int, default=10)
     parser.add_argument('--batch', help='Existing batch name to resume')
     parser.add_argument('--max-words', type=int, help='Override the word limit for this batch only')
+    parser.add_argument('--story', help='Make the video from this story file only (e.g. gen_123.json)')
     args = parser.parse_args()
     if not 1 <= args.count <= 100:
         parser.error('count must be between 1 and 100')

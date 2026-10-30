@@ -1,13 +1,14 @@
 import {createProfile, connectChannel, cancelConnection, produce, saveSettings, addStory, preschedule, generateStories,
   autopilot, saveApiKey, markRelatedDone, review, editTitle, makeVoiceSamples, exportTikTok, savePexelsKey, openFolder,
-  designVoice, keepDesign, characterPreviews, draftPersona,
+  designVoice, keepDesign, characterPreviews, draftPersona, setVoice,
   isLocalRequest} from '../../../lib/studio';
 
 const actions = {
   'create': body => createProfile(body.id, body.name, body.preset),
   'connect': body => connectChannel(body.channel),
   'cancel-connect': body => cancelConnection(body.channel),
-  'produce': body => produce(body.channel, body.count),
+  'produce': body => produce(body.channel, body.count, body.story),
+  'set-voice': body => setVoice(body.channel, body.role, body.clip),
   'settings': body => saveSettings(body.channel, body.settings),
   'add-story': body => addStory(body.channel, body.title, body.text),
   'preschedule': body => preschedule(body.channel, body.count),
@@ -22,7 +23,7 @@ const actions = {
   'pexels-key': body => savePexelsKey(body.key, body.confirmRemove === true),
   'open-folder': body => openFolder(body.channel, body.which),
   'design-voice': body => designVoice(body.channel, body.description, body.count),
-  'keep-design': body => keepDesign(body.channel, body.file, body.name),
+  'keep-design': body => keepDesign(body.channel, body.file, body.name, body.role),
   'character-previews': body => characterPreviews(body.channel, body.sample),
   'draft-persona': body => draftPersona(body.channel, body.clip, body.description),
 };
