@@ -4,6 +4,8 @@ Nothing here downloads a model or touches the network: the voice model, image
 searches and the Claude API are replaced by small fakes.
 """
 import io
+import math
+import struct
 import json
 import subprocess
 import sys
@@ -438,8 +440,8 @@ class VoiceCharacterTests(unittest.TestCase):
     def test_music_mix_uses_the_treated_voice(self):
         graph = make_video.audio_filter(0.1, True, 'deep')
         self.assertIn('asetrate=48000*0.94', graph)
-        self.assertIn('[voice]asplit[v1][v2]', graph)
-        self.assertTrue(make_video.audio_filter(0, False).endswith('loudnorm=I=-14:TP=-1.5:LRA=11[a]'))
+        self.assertIn(',asplit[v1][v2]', graph); self.assertTrue(graph.split(';')[1].startswith('[voice]'))
+        self.assertTrue(make_video.audio_filter(0, False).endswith(make_video.LOUDNESS + ',' + make_video.CLEAN + '[a]'))
 
 
 def _has(module):
@@ -696,3 +698,77 @@ class BareEnvironmentTests(unittest.TestCase):
         ''')
         result = subprocess.run([str(self.python), '-c', script], capture_output=True, text=True, timeout=900)
         self.assertIn('STATUS complete', result.stdout, result.stdout[-1500:] + result.stderr[-3000:])
+
+
+class AudioSafetyTests(unittest.TestCase):
+    """The AAC encoder refuses NaN/Inf samples ("Input contains (near) NaN/+-Inf"), which stopped a real render."""
+    def render(self, folder, wav_writer, character, extra_patches=()):
+        (folder / 'n').mkdir()
+        wav_writer(folder / 'n/narration.wav')
+        (folder / 'n/timings.json').write_text(json.dumps([{'word': 'Hello.', 'start': 0.1, 'end': 0.6}]))
+        (folder / 'n/metadata.json').write_text(json.dumps({'duration_seconds': 3.0}))
+        (folder / 'photo.jpg').write_bytes(jpeg(2400, 1600))
+        argv = ['make_video.py', '--narration', str(folder / 'n'), '--image', str(folder / 'photo.jpg'), '--destination',
+                str(folder / 'out'), '--filename', 'x.mp4', '--format', 'landscape', '--voice-character', character,
+                '--encoder', 'libx264']
+        with patch.object(sys, 'argv', argv):
+            for p in extra_patches:
+                p.start()
+            try:
+                make_video.main()
+            finally:
+                for p in reversed(extra_patches):
+                    p.stop()
+        produce_batch.validate(folder / 'out/x.mp4', 3.0)
+
+    @staticmethod
+    def float_wav_with_nan(path):
+        import array
+        samples = array.array('f', [0.3 * math.sin(i / 9) for i in range(48000 * 3)])
+        for i in range(48000, 48010):
+            samples[i] = float('nan')
+        samples[60000] = float('inf')
+        with open(path, 'wb') as handle:   # 32-bit float WAV, written by hand (no numpy in .venv)
+            data = samples.tobytes()
+            handle.write(b'RIFF' + struct.pack('<I', 36 + len(data)) + b'WAVEfmt ' +
+                         struct.pack('<IHHIIHH', 16, 3, 1, 48000, 48000 * 4, 4, 32) + b'data' + struct.pack('<I', len(data)) + data)
+
+    def test_broken_samples_are_cleaned_before_encoding(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.render(Path(folder), self.float_wav_with_nan, 'tape')
+
+    def test_a_failing_voice_character_falls_back_to_natural(self):
+        def clean_wav(path):
+            with wave.open(str(path), 'wb') as audio:
+                audio.setnchannels(1); audio.setsampwidth(2); audio.setframerate(24000)
+                audio.writeframes(b''.join(struct.pack('<h', int(6000 * math.sin(i / 9))) for i in range(24000 * 3)))
+        broken = make_video.voice_character
+
+        def nan_tape(character, source='[1:a]', output='[voice]'):
+            if character == 'tape':   # a filter that emits NaN, as the Windows build did
+                return f"{source}aresample=48000,aformat=channel_layouts=stereo,aeval=exprs='0/0|0/0',aformat=channel_layouts=stereo{output}"
+            return broken(character, source, output)
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            self.render(folder, clean_wav, 'tape', [patch.object(make_video, 'voice_character', nan_tape),
+                                                     patch.object(make_video, 'CLEAN', 'anull')])
+            self.assertEqual((folder / 'out/x.mp4.voice-fallback').read_text(), 'tape')
+
+    def test_a_voice_character_that_silences_the_audio_falls_back(self):
+        def clean_wav(path):
+            with wave.open(str(path), 'wb') as audio:
+                audio.setnchannels(1); audio.setsampwidth(2); audio.setframerate(24000)
+                audio.writeframes(b''.join(struct.pack('<h', int(6000 * math.sin(i / 9))) for i in range(24000 * 3)))
+        original = make_video.voice_character
+
+        def nan_everywhere(character, source='[1:a]', output='[voice]'):
+            if character == 'tape':   # every sample broken: the cleaner turns it into silence
+                return f"{source}aresample=48000,aformat=channel_layouts=stereo,aeval=exprs='0/0|0/0',aformat=channel_layouts=stereo{output}"
+            return original(character, source, output)
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            self.render(folder, clean_wav, 'tape', [patch.object(make_video, 'voice_character', nan_everywhere)])
+            self.assertEqual((folder / 'out/x.mp4.voice-fallback').read_text(), 'tape')
+            probe = subprocess.run([make_video.imageio_ffmpeg.get_ffmpeg_exe(), '-i', str(folder / 'out/x.mp4'), '-af', 'volumedetect',
+                                    '-f', 'null', '-'], capture_output=True, text=True)
+            self.assertNotIn('mean_volume: -inf', probe.stderr)
