@@ -441,7 +441,7 @@ class VoiceCharacterTests(unittest.TestCase):
         graph = make_video.audio_filter(0.1, True, 'deep')
         self.assertIn('asetrate=48000*0.94', graph)
         self.assertIn(',asplit[v1][v2]', graph); self.assertTrue(graph.split(';')[1].startswith('[voice]'))
-        self.assertTrue(make_video.audio_filter(0, False).endswith('loudnorm=I=-14:TP=-1.5:LRA=11[a]'))
+        self.assertTrue(make_video.audio_filter(0, False).endswith(make_video.LOUDNESS + ',' + make_video.CLEAN + '[a]'))
 
 
 def _has(module):
