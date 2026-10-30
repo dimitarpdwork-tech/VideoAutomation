@@ -546,12 +546,27 @@ class ClaudeJsonTests(unittest.TestCase):
         client.messages.create.return_value = SimpleNamespace(content=list(blocks), stop_reason=stop)
         return client
 
-    def test_tool_reply_is_returned_as_json(self):
+    def test_structured_reply_is_returned_as_json(self):
         import claude_json
-        client = self.reply(SimpleNamespace(type='tool_use', input={'title': 'T', 'text': 'Line one.\nLine "two".'}))
-        text = claude_json.ask(client, 'm', 'prompt', 'system')
+        client = self.reply(SimpleNamespace(type='text', text=json.dumps({'title': 'T', 'text': 'Line one.\nLine "two".'})), stop='end_turn')
+        schema = story_generator.story_schema('full')
+        text = claude_json.ask(client, 'm-structured', 'prompt', 'system', schema=schema)
         self.assertEqual(story_generator._json(text)['text'], 'Line one.\nLine "two".')
-        self.assertEqual(client.messages.create.call_args.kwargs['tool_choice'], {'type': 'tool', 'name': 'submit'})
+        sent = client.messages.create.call_args.kwargs['extra_body']['output_config']['format']
+        self.assertEqual((sent['type'], sent['schema']['additionalProperties']), ('json_schema', False))
+        self.assertIn('teaser_sentences', sent['schema']['required'])
+
+    def test_schema_refusal_falls_back_to_plain_reply(self):
+        import claude_json
+
+        class BadRequest(Exception):
+            status_code = 400
+        client = MagicMock()
+        client.messages.create.side_effect = [BadRequest('output_config.format: not supported for this model'),
+                                              SimpleNamespace(content=[SimpleNamespace(type='text', text='<json>{"title": "T"}</json>')], stop_reason='end_turn')]
+        text = claude_json.ask(client, 'm-old', 'prompt', schema=claude_json.strict({'title': {'type': 'string'}}))
+        self.assertEqual(story_generator._json(text), {'title': 'T'})
+        self.assertNotIn('extra_body', client.messages.create.call_args.kwargs)
 
     def test_failures_say_why(self):
         import claude_json

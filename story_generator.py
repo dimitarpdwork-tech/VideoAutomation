@@ -61,7 +61,7 @@ BASE_RULES = """Rules for every story:
 - Delivery cues for the narrator, used sparingly (at most one per 80 words): [pause] right before a reveal; [tense], [whisper] or [urgent] at the start of a sentence that needs that delivery. Never inside quotation marks, never two in a row.
 - image_query: a 3-6 word stock-photo search for ONE atmospheric background image that fits the story: a place, object or landscape, no people, no faces, no gore (e.g. "abandoned farmhouse at night").
 
-Return the result as one JSON object through the submit tool."""
+Reply with the JSON object only."""
 
 GENRES = {
     'horror': """You write original first-person horror stories for narrated videos, in the tradition of r/nosleep and late-night radio.
@@ -350,12 +350,38 @@ def parse_reply(text, length, persona=None):
     return apply_persona(result, data if length == 'full' else {}, persona)
 
 
-def ask_model(client, model, prompt, length, system=None, max_tokens=None, structured=True):
-    """Claude's reply as text. Structured replies (JSON) come through a forced tool call."""
+S = {'type': 'string'}
+NARRATOR = {'type': 'string', 'enum': ['male', 'female']}
+
+
+def story_schema(length, persona=None, concept=False):
+    """The JSON shape of a story reply (structured outputs)."""
+    properties = {'title': S, 'text': S, 'theme': S, 'narrator': NARRATOR, 'image_query': S}
+    if length == 'full':
+        properties['teaser_sentences'] = {'type': 'integer'}
+    if persona and length in ('full', 'long'):
+        properties.update(intro=S, outro=S)
+    if concept:
+        properties['concept'] = S
+    return claude_json.strict(properties)
+
+
+def outline_schema(persona=None):
+    chapter = claude_json.strict({'heading': S, 'summary': S})
+    properties = {'title': S, 'premise': S, 'narrator': NARRATOR, 'image_query': S, 'theme': S,
+                  'chapters': {'type': 'array', 'items': chapter}}
+    if persona:
+        properties.update(intro=S, outro=S)
+    return claude_json.strict(properties)
+
+
+def ask_model(client, model, prompt, length, system=None, max_tokens=None, structured=True, schema=None):
+    """Claude's reply as text. Structured replies (JSON) follow `schema` via structured outputs."""
     max_tokens = max_tokens or {'full': 8000, 'long': 6000}.get(length, 2500)
     try:
         if structured:
-            return claude_json.ask(client, model, prompt, system or BASE_RULES, max_tokens)
+            return claude_json.ask(client, model, prompt, system or BASE_RULES, max_tokens,
+                                   schema or story_schema(length))
         response = client.messages.create(model=model, max_tokens=max_tokens, system=system or BASE_RULES,
                                           messages=[{'role': 'user', 'content': prompt}])
     except claude_json.ReplyError as exc:
@@ -382,7 +408,8 @@ def write_long(client, model, config, low, high, own, reddit, avoid, feedback, l
                  if narrator_persona.active(config) else '') + '.']
     if feedback:
         lines.append(f'\nThe previous attempt was rejected: {feedback}. Choose something clearly different.')
-    outline = _json(ask_model(client, model, '\n'.join(lines), 'long', system, 4000))
+    outline = _json(ask_model(client, model, '\n'.join(lines), 'long', system, 4000,
+                              schema=outline_schema(narrator_persona.active(config))))
     plan = outline.get('chapters') or []
     if not isinstance(plan, list) or len(plan) < 2:
         raise GenerationError('the outline had no chapters')
@@ -470,7 +497,8 @@ def generate(channel, count, length='auto', client=None, log=print, mode='auto')
                 else:
                     prompt = (build_concept_prompt(config, length, low, high, source, avoid, feedback) if source
                               else build_prompt(config, length, low, high, own, reddit, avoid, feedback))
-                    candidate = parse_reply(ask_model(client, model, prompt, length, system), length,
+                    schema = story_schema(length, narrator_persona.active(config), concept=bool(source))
+                    candidate = parse_reply(ask_model(client, model, prompt, length, system, schema=schema), length,
                                             narrator_persona.active(config))
             except GenerationError as exc:
                 feedback = str(exc)
