@@ -330,7 +330,8 @@ class ProductionWithChatterboxTests(unittest.TestCase):
                 cp = channels.paths('night')
                 channels.write_json(cp['stories'] / 'gen_1.json', {'id': 'gen_1', 'title': 'The garage', 'text_source': 'generated',
                                                                    'text': '[tense] It moved. ' + 'The car sat there. ' * 300,
-                                                                   'image_query': 'garage night'})
+                                                                   'image_query': 'garage night', 'intro': 'Come in.',
+                                                                   'outro': 'Leave the light off.'})
                 calls = []
 
                 def narrate_with_worker(**args):
@@ -364,6 +365,10 @@ class ProductionWithChatterboxTests(unittest.TestCase):
                 self.assertEqual(plan[0]['image'], 'output/shared/images/night/gen_1.jpg')
                 self.assertEqual(plan[0]['narration_warnings'], ['Check the line "x"'] * 2)   # full + teaser
                 self.assertEqual({c['expressiveness'] for c in calls}, {0.6})
+                full_story = channels.read_json(calls[0]['story_path'])              # the full video has the host's lines
+                self.assertEqual(Path(calls[0]['story_path']).name, 'full_story.json')
+                self.assertIn('Leave the light off.', full_story['text'])
+                self.assertNotIn('Leave the light off.', channels.read_json(calls[1]['story_path'])['text'])   # the teaser does not
                 render = next(c for c in commands if 'make_video.py' in str(c[1]))
                 self.assertIn('--image', render)
                 thumb = next(c for c in commands if 'thumbnail.py' in str(c[1]))
@@ -483,3 +488,53 @@ class VoiceDesignerTests(unittest.TestCase):
             index = json.loads((folder / 'samples/index.json').read_text())
             self.assertEqual([row['engine'] for row in index], ['chatterbox', 'kokoro'])   # Kokoro rows kept
             self.assertEqual(index[0]['description'], 'Designed: An old caretaker')
+
+
+class PersonaTests(unittest.TestCase):
+    PERSONA = {'name': 'The Caretaker', 'identity': 'An old caretaker of an empty building.', 'speech': 'Short, dry sentences.',
+               'intro': 'A quiet welcome.', 'outro': 'Ends with "Leave the light off."', 'asides': 'rare',
+               'gender': 'male', 'age': '55-75'}
+
+    def test_prompt_matches_story_narrator_to_the_voice(self):
+        import persona
+        block = persona.prompt_block(self.PERSONA)
+        self.assertIn('a male first-person narrator aged about 55-75', block)
+        self.assertIn('at most 2 time(s)', block)
+        config = channels.with_defaults({'story_category': 'Horror fiction', 'persona': self.PERSONA})
+        self.assertIn('The Caretaker', story_generator.system_prompt(config))
+        self.assertNotIn('Caretaker', story_generator.system_prompt(channels.with_defaults({'story_category': 'Horror'})))
+
+    def test_reply_gets_host_lines_and_limited_asides(self):
+        text = ('[tense] The lamp in room nine was on again. ' + 'I checked the hallway. ' * 30 +
+                '[aside] I should have left then. ' * 4 + 'The door was open.')
+        reply = '<json>' + json.dumps({'title': 'Room nine', 'text': text, 'narrator': 'female', 'teaser_sentences': 3,
+                                       'intro': 'Come in. ' * 40, 'outro': 'Leave the light off.'}) + '</json>'
+        story = story_generator.parse_reply(reply, 'full', self.PERSONA)
+        self.assertEqual(story['text'].count('[aside]'), 2)
+        self.assertEqual(story['narrator_gender'], 'male')                      # the voice decides
+        self.assertLessEqual(len(story['intro'].split()), 60)
+        self.assertEqual(story['outro'], 'Leave the light off.')
+        short = story_generator.parse_reply(reply.replace('"teaser_sentences": 3, ', ''), 'short', self.PERSONA)
+        self.assertNotIn('[aside]', short['text'])                              # Shorts stay pure story
+        self.assertNotIn('intro', short)
+
+    def test_full_video_is_cold_open_intro_story_signoff(self):
+        import persona
+        story = {'text': 'The lamp was on.\n\nI went upstairs.\n\nNobody was there.', 'intro': 'Come in.', 'outro': 'Leave the light off.'}
+        framed = persona.framed_text(story)
+        self.assertEqual(delivery.strip(framed).split('\n\n'),
+                         ['The lamp was on.', 'Come in.', 'I went upstairs.', 'Nobody was there.', 'Leave the light off.'])
+        self.assertTrue(framed.startswith('The lamp was on.\n\n[pause] Come in.'))
+        self.assertTrue(framed.endswith('[pause] Leave the light off.'))
+        self.assertEqual(persona.framed_text({'text': 'Only story.'}), 'Only story.')
+
+    def test_draft_from_voice_description(self):
+        import persona
+        payload = {'name': 'The Caretaker', 'identity': 'Looks after an empty building.', 'speech': 'Dry.', 'intro': 'x',
+                   'outro': 'y', 'asides': 'often', 'gender': 'male', 'age': '60-80', 'expressiveness': 2, 'voice_character': 'uncanny'}
+        client = MagicMock()
+        client.messages.create.return_value = SimpleNamespace(content=[SimpleNamespace(type='text', text='<json>' + json.dumps(payload) + '</json>')])
+        result, extras = persona.draft('A deep hoarse voice', {'name': 'The Unlit Room'}, client)
+        self.assertEqual(result['asides'], 'rare')          # unknown value falls back
+        self.assertEqual(extras, {'expressiveness': 0.8, 'voice_character': 'uncanny'})
+        self.assertIn('The Unlit Room', client.messages.create.call_args.kwargs['messages'][0]['content'])

@@ -7,6 +7,7 @@ Stories may contain a few bracketed cues:
     [whisper]  read the next sentence hushed and quieter
     [urgent]   read the next sentence faster, more alarmed
     [calm]     read the next sentence gently (sleep stories)
+    [aside]    the host steps out of the story for a sentence (narrator persona)
 
 The story generator adds them sparingly. Chatterbox uses them to vary its
 delivery; Kokoro cannot act, so it simply drops them. They never appear in
@@ -17,7 +18,7 @@ no letters, so duplicate detection and word counts ignore them.
 """
 import re
 
-CUES = ('pause', 'tense', 'whisper', 'urgent', 'calm')
+CUES = ('pause', 'tense', 'whisper', 'urgent', 'calm', 'aside')
 _MARK = {cue: chr(0xE000 + index) for index, cue in enumerate(CUES)}
 _CUE_OF = {mark: cue for cue, mark in _MARK.items()}
 _BRACKET = re.compile(r'\[\s*(' + '|'.join(CUES) + r')\s*\]', re.I)
@@ -27,7 +28,8 @@ _MARKS = re.compile('[' + ''.join(_MARK.values()) + ']')
 def strip(text):
     """Text without any cues, for captions, titles, descriptions and counts."""
     text = _MARKS.sub(' ', _BRACKET.sub(' ', text or ''))
-    return re.sub(r'[ \t]{2,}', ' ', re.sub(r' +([.,!?;:])', r'\1', text)).strip()
+    text = re.sub(r'[ \t]{2,}', ' ', re.sub(r' +([.,!?;:])', r'\1', text))
+    return re.sub(r'(?m)^[ \t]+|[ \t]+$', '', text).strip()
 
 
 def to_marks(text):

@@ -34,6 +34,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 import delivery
+import persona as narrator_persona
 import variety
 from channel_config import ROOT, CHANNELS, load_channel, paths, read_json, write_json, update_json
 
@@ -92,7 +93,9 @@ def genre(config):
 
 
 def system_prompt(config):
-    return GENRES[genre(config)] + '\n\n' + BASE_RULES
+    persona = narrator_persona.active(config)
+    block = ('\n\n' + narrator_persona.prompt_block(persona)) if persona else ''
+    return GENRES[genre(config)] + block + '\n\n' + BASE_RULES
 
 
 def all_story_files():
@@ -227,12 +230,14 @@ def _performance_lines(own, reddit):
     return lines
 
 
-def _fields(length):
+def _fields(length, persona=None):
     fields = ['"title": string', '"text": string (paragraphs separated by blank lines)',
               '"theme": short label for the theme or concept', '"narrator": "male" or "female"',
               '"image_query": string']
     if length == 'full':
         fields.append('"teaser_sentences": integer')
+    if persona and length in ('full', 'long'):
+        fields += narrator_persona.frame_fields(persona)
     return fields
 
 
@@ -247,7 +252,7 @@ def build_prompt(config, length, low, high, own, reddit, avoid_titles, feedback=
     if length == 'full':
         lines.append('Also choose where a 40-second teaser should stop: the number of opening sentences '
                      '(about 70-100 words) that end on a cliffhanger, right before something important is revealed.')
-    lines.append('JSON fields: ' + ', '.join(_fields(length)) + '.')
+    lines.append('JSON fields: ' + ', '.join(_fields(length, narrator_persona.active(config))) + '.')
     if feedback:
         lines.append(f'\nYour previous attempt was rejected: {feedback}. Write something clearly different.')
     return '\n'.join(lines)
@@ -273,7 +278,7 @@ def build_concept_prompt(config, length, low, high, source, avoid_titles, feedba
     if length == 'full':
         lines.append('Also choose where a 40-second teaser should stop: the number of opening sentences '
                      '(about 70-100 words) that end on a cliffhanger, right before something important is revealed.')
-    lines.append('JSON fields: ' + ', '.join(_fields(length)) + ', "concept": the one-sentence premise you kept.')
+    lines.append('JSON fields: ' + ', '.join(_fields(length, narrator_persona.active(config))) + ', "concept": the one-sentence premise you kept.')
     if feedback:
         lines.append(f'\nYour previous attempt was rejected: {feedback}.')
     return '\n'.join(lines)
@@ -297,10 +302,28 @@ def tidy_cues(text):
     return text
 
 
-def parse_reply(text, length):
+def apply_persona(result, data, persona):
+    """Host lines, asides and narrator gender as the persona allows."""
+    if not persona:
+        result['text'] = narrator_persona.limit_asides(result['text'], None)
+        return result
+    result['text'] = narrator_persona.limit_asides(result['text'], persona)
+    for key, limit in (('intro', narrator_persona.INTRO_WORDS), ('outro', narrator_persona.OUTRO_WORDS)):
+        line = narrator_persona.clean_line(data.get(key), limit)
+        if line:
+            result[key] = line
+    if persona.get('gender') in ('male', 'female'):
+        result['narrator_gender'] = persona['gender']
+    result['persona'] = persona.get('name') or 'host'
+    return result
+
+
+def parse_reply(text, length, persona=None):
     data = _json(text)
+    # Shorts have no room for the host stepping out of the story.
+    persona = persona if length == 'full' else ({**persona, 'asides': 'none'} if persona else None)
     title = re.sub(r'\s+', ' ', str(data.get('title', ''))).strip().strip('"')
-    story_text = tidy_cues(str(data.get('text', '')).strip())
+    story_text = tidy_cues(narrator_persona.limit_asides(str(data.get('text', '')).strip(), persona))
     if not title or len(title) > 100 or re.search(r'[<>]', title):
         raise GenerationError('missing or invalid title')
     if len(_words(story_text)) < 60:
@@ -323,7 +346,7 @@ def parse_reply(text, length):
             sentences = 0
         if sentences > 0:
             result['teaser_sentences'] = max(2, sentences)
-    return result
+    return apply_persona(result, data if length == 'full' else {}, persona)
 
 
 def ask_model(client, model, prompt, length, system=None, max_tokens=None):
@@ -345,7 +368,9 @@ def write_long(client, model, config, low, high, own, reddit, avoid, feedback, l
     lines += [f'Plan one long story of about {target:,} words in {chapters} chapters. Do not write it yet.',
               'JSON fields: "title": string, "premise": two sentences, "narrator": "male" or "female", '
               '"image_query": string, "theme": short label, '
-              f'"chapters": list of {chapters} objects with "heading" and "summary" (3-4 sentences each).']
+              f'"chapters": list of {chapters} objects with "heading" and "summary" (3-4 sentences each)'
+              + (', ' + ', '.join(narrator_persona.frame_fields(narrator_persona.active(config)))
+                 if narrator_persona.active(config) else '') + '.']
     if feedback:
         lines.append(f'\nThe previous attempt was rejected: {feedback}. Choose something clearly different.')
     outline = _json(ask_model(client, model, '\n'.join(lines), 'long', system, 3000))
@@ -375,7 +400,8 @@ def write_long(client, model, config, low, high, own, reddit, avoid, feedback, l
             raise GenerationError(f'chapter {number} came back too short')
         texts.append(chapter_text)
         previous = ' '.join(chapter_text.split()[-60:])
-    story = {'title': title, 'text': tidy_cues('\n\n'.join(texts)), 'theme': str(outline.get('theme', ''))[:80]}
+    joined = narrator_persona.limit_asides('\n\n'.join(texts), narrator_persona.active(config))
+    story = {'title': title, 'text': tidy_cues(joined), 'theme': str(outline.get('theme', ''))[:80]}
     if outline.get('narrator') in ('male', 'female'):
         story['narrator_gender'] = outline['narrator']
     query = re.sub(r'[^\w\s\-]', '', str(outline.get('image_query') or '')).strip()
@@ -384,7 +410,7 @@ def write_long(client, model, config, low, high, own, reddit, avoid, feedback, l
     problem = variety.hook_problem(story['text'])
     if problem:
         raise GenerationError(problem)
-    return story
+    return apply_persona(story, outline, narrator_persona.active(config))
 
 
 def _client():
@@ -434,7 +460,8 @@ def generate(channel, count, length='auto', client=None, log=print, mode='auto')
                 else:
                     prompt = (build_concept_prompt(config, length, low, high, source, avoid, feedback) if source
                               else build_prompt(config, length, low, high, own, reddit, avoid, feedback))
-                    candidate = parse_reply(ask_model(client, model, prompt, length, system), length)
+                    candidate = parse_reply(ask_model(client, model, prompt, length, system), length,
+                                            narrator_persona.active(config))
             except GenerationError as exc:
                 feedback = str(exc)
                 log(f'Story {number}: attempt {attempt} unusable ({exc}).')
