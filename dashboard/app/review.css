@@ -45,3 +45,10 @@ tr.clickable{cursor:pointer}tr.clickable:hover{background:#fafaf6}
 .tiktok-list ul{margin:8px 0;padding-left:18px}.tiktok-list li{margin:4px 0}.tiktok-list a{color:#46603a}
 .watched{color:#5f6657;font-size:11px}
 @media(max-width:700px){.sample-list li{grid-template-columns:1fr}}
+.voice-panel{border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-top:18px;background:#fbfbf8;display:flex;flex-direction:column;gap:10px}
+.voice-head{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;align-items:flex-start}
+.voice-head strong{font:700 14px Manrope,Arial,sans-serif}.voice-head p{font-size:11px;color:#5f6657;margin:6px 0 0;max-width:640px;line-height:1.6}
+.current-voice{font-size:11px;background:#eef2e7;color:#2f3a26;border-radius:999px;padding:3px 10px;margin-left:6px}
+.voice-panel>small{font-size:10px;color:#5f6657}
+.channel-controls button.folder,.folder-row button{background:white}
+.folder-row{margin-top:10px}
