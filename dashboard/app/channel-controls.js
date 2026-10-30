@@ -51,7 +51,10 @@ function VoiceCharacter({data, busy, action, sample}) {
 function VoiceDesigner({data, busy, action}) {
   const [description, setDescription] = useState(''), [names, setNames] = useState({});
   const running = data.designs?.running;
-  return <details className="designer-block" open={running || undefined}>
+  // Open while designing and afterwards, so the new takes are in view; only the person closes it.
+  const [open, setOpen] = useState(false);
+  useEffect(() => { if (running) setOpen(true); }, [running]);
+  return <details className="designer-block" open={open} onToggle={e => setOpen(e.currentTarget.open)}>
     <summary><strong>Design a new voice</strong> <small>Describe a narrator nobody else has; it belongs to nobody, so it is yours to use.</small></summary>
     {!data.designerInstalled ? <p className="reason">Not installed yet. Run <code>setup_voice_designer.cmd</code> in the StoryShortsStudio folder once (about 7 GB of downloads; needs your NVIDIA card).</p> : <>
       <textarea rows={3} maxLength={500} value={description} onChange={e => setDescription(e.target.value)}

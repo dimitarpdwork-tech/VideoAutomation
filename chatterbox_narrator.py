@@ -33,6 +33,7 @@ from pathlib import Path
 
 os.environ.setdefault('TQDM_DISABLE', '1')            # no progress-bar spam in the dashboard log
 os.environ.setdefault('TRANSFORMERS_VERBOSITY', 'error')
+os.environ.setdefault('HF_HUB_DISABLE_SYMLINKS_WARNING', '1')
 
 import delivery  # noqa: E402
 import narrate   # noqa: E402  (also points HF_HOME at .model-cache)
