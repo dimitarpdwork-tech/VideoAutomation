@@ -904,3 +904,21 @@ class MusicTests(unittest.TestCase):
                                      '--encoder', 'libx264'], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr[-800:])
             self.assertIn('host music host_box.wav', result.stdout)
+
+
+class ChosenStoryTests(unittest.TestCase):
+    def test_production_can_be_limited_to_one_story(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            with patch.object(channels, 'ROOT', root), patch.object(channels, 'CHANNELS', root / 'channels'), \
+                    patch.object(channels, 'SHARED', root / 'output/shared'):
+                channels.create_channel('night', 'Night', 'horror')
+                config, cp = channels.load_channel('night'), channels.paths('night')
+                low, high = produce_batch.limits(config)
+                for name, words in (('a_short.json', low + 5), ('b_new.json', low + 40)):
+                    channels.write_json(cp['stories'] / name, {'title': name, 'text': 'word ' * words, 'text_source': 'generated'})
+                args = SimpleNamespace(count=1, story='b_new.json', channel='night')
+                plan = produce_batch.plan_batch(args, config, cp, [], {})
+                self.assertEqual([item['story'] for item in plan], ['b_new.json'])   # not the shorter one ranked first
+                with self.assertRaisesRegex(RuntimeError, 'cannot be used'):
+                    produce_batch.plan_batch(SimpleNamespace(count=1, story='missing.json', channel='night'), config, cp, [], {})
