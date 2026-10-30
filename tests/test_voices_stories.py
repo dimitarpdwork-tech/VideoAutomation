@@ -587,3 +587,33 @@ class ClaudeJsonTests(unittest.TestCase):
                 created = story_generator.generate('night', 1, client=self.reply(stop='refusal'), log=logs.append)
                 self.assertEqual(created, [])
                 self.assertTrue(any('declined' in line for line in logs), logs)
+
+
+class ImageEnvironmentTests(unittest.TestCase):
+    def test_pexels_asks_for_a_web_sized_copy(self):
+        payload = json.dumps({'photos': [{'id': 7, 'url': 'https://pexels.com/7', 'photographer': 'A', 'width': 6000, 'height': 4000,
+                                          'src': {'original': 'https://images.pexels.com/photos/7/p.jpeg'}}]}).encode()
+        with patch.object(image_picker, '_get', return_value=(payload, 'application/json')):
+            result = image_picker.search_pexels('dark house', 'landscape', 'key')[0]
+        self.assertEqual(result['url'], 'https://images.pexels.com/photos/7/p.jpeg?auto=compress&cs=tinysrgb&w=2560')
+
+    def test_without_pillow_the_search_runs_in_the_video_environment(self):
+        import builtins
+        real_import = builtins.__import__
+
+        def no_pillow(name, *args, **kwargs):
+            if name == 'PIL':
+                raise ImportError('No module named PIL')
+            return real_import(name, *args, **kwargs)
+        with tempfile.TemporaryDirectory() as folder, patch.object(produce_batch, 'SHARED', Path(folder)):
+            run = MagicMock(return_value=SimpleNamespace(returncode=0, stdout='{"path": "/x/img.jpg"}\n', stderr='Background image: found\n'))
+            with patch.object(builtins, '__import__', no_pillow), patch.object(produce_batch.subprocess, 'run', run):
+                path = produce_batch.pick_image({'title': 'T'}, {'id': 'night'}, {'story': 'gen_1.json'}, 'landscape')
+            self.assertEqual(path, Path('/x/img.jpg'))
+            command = run.call_args.args[0]
+            self.assertEqual(command[0], produce_batch.python())
+            self.assertIn('image_picker.py', command[1])
+            run.return_value = SimpleNamespace(returncode=0, stdout='{"error": "No unused free image"}\n', stderr='')
+            with patch.object(builtins, '__import__', no_pillow), patch.object(produce_batch.subprocess, 'run', run):
+                with self.assertRaisesRegex(image_picker.NoImage, 'No unused free image'):
+                    produce_batch.pick_image({'title': 'T'}, {'id': 'night'}, {'story': 'gen_1.json'}, 'landscape')

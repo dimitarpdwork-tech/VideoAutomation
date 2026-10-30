@@ -73,7 +73,11 @@ def search_pexels(query, orientation, key):
     results = []
     for photo in json.loads(data).get('photos', []):
         src = photo.get('src') or {}
-        results.append({'id': f"pexels:{photo['id']}", 'url': src.get('original') or src.get('large2x'),
+        # A web-sized copy (about 2,560 px): originals can be 30-60 MB.
+        size = 'h=2560' if orientation == 'portrait' else 'w=2560'
+        url = (src['original'] + ('&' if '?' in src['original'] else '?') + f'auto=compress&cs=tinysrgb&{size}'
+               if src.get('original') else src.get('large2x'))
+        results.append({'id': f"pexels:{photo['id']}", 'url': url,
                         'page': photo.get('url'), 'author': photo.get('photographer'),
                         'license': 'Pexels License (free commercial use, no attribution required)',
                         'width': photo.get('width') or 0, 'height': photo.get('height') or 0})
@@ -141,7 +145,12 @@ def pick(story, config, channel, story_key, orientation='landscape', log=print, 
             try:
                 results = search(query)
             except Exception as exc:  # offline, rate limit, bad key: try the next source
-                problems.append(f'{name}: {exc}')
+                if name == 'Openverse' and '401' in str(exc):
+                    problems.append('Openverse now needs an account, so it was skipped')
+                elif name == 'Pexels' and '401' in str(exc):
+                    problems.append('Pexels refused the API key; check it in Settings')
+                else:
+                    problems.append(f'{name}: {exc}')
                 continue
             for result in results:
                 if not result.get('url') or result['id'] in used or max(result['width'], result['height']) < MIN_WIDTH:
@@ -164,3 +173,28 @@ def pick(story, config, channel, story_key, orientation='landscape', log=print, 
     detail = '; '.join(dict.fromkeys(problems))[:300]
     raise NoImage('No unused free image found for this story' + (f' ({detail})' if detail else '') +
                   '. Add a free Pexels API key in Settings, add image keywords, or use background clips.')
+
+
+def main():
+    """Command line used by production when it runs in an environment without Pillow."""
+    import argparse
+    import sys
+    from channel_config import load_channel
+    parser = argparse.ArgumentParser(description='Pick a background image for one story.')
+    parser.add_argument('--channel', required=True)
+    parser.add_argument('--story', required=True, type=Path, help='Story JSON file')
+    parser.add_argument('--key', required=True, help='Name the image is saved under')
+    parser.add_argument('--orientation', choices=['landscape', 'portrait'], default='landscape')
+    args = parser.parse_args()
+    story = read_json(args.story, {}) or {}
+    try:
+        path = pick(story, load_channel(args.channel), args.channel, args.key, args.orientation,
+                    log=lambda m: print(m, file=sys.stderr, flush=True))
+    except NoImage as exc:
+        print(json.dumps({'error': str(exc)}), flush=True)
+        return
+    print(json.dumps({'path': str(path)}), flush=True)
+
+
+if __name__ == '__main__':
+    main()
