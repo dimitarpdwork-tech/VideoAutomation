@@ -379,6 +379,39 @@ def host_scene(config):
     return None
 
 
+MUSIC_TYPES = ('.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac')
+DARK_THEMES = ('horror', 'scary', 'creepy', 'nosleep', 'paranormal', 'true crime', 'mystery')
+
+
+def _has_tracks(folder):
+    return folder.is_dir() and any(p.suffix.lower() in MUSIC_TYPES for p in folder.iterdir())
+
+
+def music_for(config):
+    """(story music, host music): a folder or file each, or None.
+
+    Your own tracks come first: the channel folder's music/story and music/host,
+    then the shared music folder for the story. Dark channels otherwise get the
+    built-in tension drone and music box (music_synth.py).
+    """
+    if config.get('music_volume', 0) <= 0:
+        return None, None
+    own = CHANNELS / (config.get('id') or 'main') / 'music'
+    for sub in ('story', 'host'):
+        try:
+            (own / sub).mkdir(parents=True, exist_ok=True)   # so you can see where your tracks go
+        except OSError:
+            pass
+    story = own / 'story' if _has_tracks(own / 'story') else (ROOT / 'music' if _has_tracks(ROOT / 'music') else None)
+    host = own / 'host' if _has_tracks(own / 'host') else None
+    dark = any(word in (config.get('story_category') or '').lower() for word in DARK_THEMES)
+    if dark and (story is None or host is None):
+        import music_synth
+        drone, box = music_synth.ensure(SHARED / 'music')
+        story, host = story or drone, host or box
+    return story, host
+
+
 def render(narration, item, config, dest, filename, layout):
     command = [python(), str(ROOT / 'make_video.py'), '--narration', str(narration), *background_args(item),
                '--destination', str(dest), '--name', item['name'], '--format', layout,
@@ -398,8 +431,13 @@ def render(narration, item, config, dest, filename, layout):
     scene = host_scene(config)
     if scene:
         command += ['--host-scene', str(scene)]
-    if (ROOT / 'music').is_dir() and config.get('music_volume', 0) > 0:
-        command += ['--music', str(ROOT / 'music'), '--music-volume', str(config['music_volume'])]
+    story_music, host_music = music_for(config)
+    if story_music or host_music:
+        command += ['--music-volume', str(config['music_volume'])]
+    if story_music:
+        command += ['--music', str(story_music)]
+    if host_music:
+        command += ['--host-music', str(host_music)]
     subprocess.run(command, check=True)
     output = filename or (item['name'] + ('_yellow_words' if config['caption_style'] == 'words' and layout == 'vertical' else '') + '.mp4')
     marker = Path(dest) / (output + '.voice-fallback')
