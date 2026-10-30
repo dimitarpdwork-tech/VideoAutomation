@@ -400,7 +400,10 @@ def music_envelopes(spans, fade=MUSIC_FADE):
     return story, f'1-{story}'
 
 
-def audio_filter(music_volume, has_music, character='natural', music_input=2, host_input=None, spans=()):
+END_HOLD, END_FADE = 3.5, 2.5   # seconds of music after the last word, and the fade to black
+
+
+def audio_filter(music_volume, has_music, character='natural', music_input=2, host_input=None, spans=(), fade_out_at=None):
     """Voice (with its character), then the music ducked under it, then loudness.
 
     music_input: the story music's input index (when has_music); host_input: the
@@ -426,16 +429,18 @@ def audio_filter(music_volume, has_music, character='natural', music_input=2, ho
         music += (f";{joined}amix=inputs={len(spans)}:duration=first:normalize=0," if len(spans) > 1 else f';{joined}') + \
             f"volume='{host_env}':eval=frame[mh]"
         streams.append('[mh]')
+    pad = ',apad' if fade_out_at else ''      # silence after the last word, for the ending
+    end = f',afade=t=out:st={fade_out_at:.3f}:d={END_FADE}' if fade_out_at else ''
     if not streams:
-        return f'{voice};[voice]{CLEAN},{LOUDNESS},{CLEAN}[a]'
-    graph = f'{voice};[voice]{CLEAN},asplit[v1][v2]' + music
+        return f'{voice};[voice]{CLEAN}{pad},{LOUDNESS},{CLEAN}{end}[a]'
+    graph = f'{voice};[voice]{CLEAN}{pad},asplit[v1][v2]' + music
     if len(streams) > 1:
         graph += f";{''.join(streams)}amix=inputs={len(streams)}:duration=first:normalize=0[m]"
     else:
         graph += f';{streams[0]}anull[m]'
     # Gentle ducking: music dips under speech without pumping back up in every pause.
     return (graph + ';[m][v1]sidechaincompress=threshold=0.05:ratio=4:attack=20:release=600[duck];'
-            f'[v2][duck]amix=inputs=2:duration=first:normalize=0,{LOUDNESS},{CLEAN}[a]')
+            f'[v2][duck]amix=inputs=2:duration=first:normalize=0,{LOUDNESS},{CLEAN}{end}[a]')
 
 
 _ENCODER = None
@@ -505,7 +510,11 @@ def main():
     destination.mkdir(parents=True, exist_ok=True)
     words = json.loads((narration / 'timings.json').read_text(encoding='utf-8'))
     narration_meta = json.loads((narration / 'metadata.json').read_text(encoding='utf-8'))
-    duration = narration_meta['duration_seconds']
+    spoken = narration_meta['duration_seconds']
+    # Full videos end gently: the music carries on for a few seconds while the picture fades
+    # out, instead of the video stopping on the last word. Shorts loop, so they stop cleanly.
+    ending = END_HOLD if args.format == 'landscape' else 0.0
+    duration = spoken + ending
     host_spans = [span for span in narration_meta.get('host_spans') or [] if span[1] > span[0]]
     background = args.background.resolve()
 
@@ -559,7 +568,10 @@ def main():
     video_graph = graph
 
     def command(chosen, character):
-        full_graph = video_graph + ';' + audio_filter(args.music_volume, bool(track), character, 2, host_input, host_spans)
+        fade = f'fade=t=out:st={duration - END_FADE:.3f}:d={END_FADE}'
+        graph_v = video_graph[:-len('[v]')] + f'[vend];[vend]{fade}[v]' if ending else video_graph
+        full_graph = graph_v + ';' + audio_filter(args.music_volume, bool(track), character, 2, host_input, host_spans,
+                                                   duration - END_FADE if ending else None)
         return [imageio_ffmpeg.get_ffmpeg_exe(), '-hide_banner', '-loglevel', 'error', '-y', *inputs,
                 '-filter_complex', full_graph, '-map', '[v]', '-map', '[a]',
                 '-t', f'{duration:.3f}', *encoder_args(chosen),

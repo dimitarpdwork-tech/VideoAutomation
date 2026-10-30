@@ -44,14 +44,21 @@ SAMPLES = ROOT / 'output' / 'shared' / 'voice_samples'
 CLIP_TYPES = ('.wav', '.mp3', '.flac', '.m4a', '.ogg')
 SAMPLE_RATE = 24000
 MAX_CHARS = 260          # longer pieces make Chatterbox drift or skip words
-PAUSE_SECONDS = 0.9      # [pause]
-SOFT_GAP = 0.12          # between pieces that end mid-sentence
+# Pacing, like a person telling the story: a beat after every sentence, a breath at
+# every paragraph, a real silence at [pause], and a slower last stretch.
+PAUSE_SECONDS = 1.6      # [pause]: right before a reveal
+PARAGRAPH_SECONDS = 1.05 # a new paragraph
+SENTENCE_EXTRA = 0.2     # added to the channel's period pause after a full stop
+QUESTION_EXTRA = 0.15    # ... and a little more after ?, ! or …
+SOFT_GAP = 0.15          # between pieces of one long sentence
+ENDING_SHARE, ENDING_SLOWER = 0.12, 1.3   # the last 12% of the story: gaps 30% longer
+MAX_EXAGGERATION = 0.75  # above this Chatterbox rushes and overacts
 ATTEMPTS = 3
 # Seconds per spoken word that count as a plausible reading at normal speed.
 MIN_SPW, MAX_SPW = 0.16, 1.05
 # How each cue shifts expressiveness (Chatterbox "exaggeration") and pacing (cfg_weight:
 # lower is slower and more deliberate).
-STYLE = {None: (0.0, 0.5), 'tense': (0.25, 0.3), 'whisper': (-0.2, 0.3), 'urgent': (0.4, 0.6), 'calm': (-0.15, 0.45),
+STYLE = {None: (0.0, 0.42), 'tense': (0.12, 0.3), 'whisper': (-0.15, 0.3), 'urgent': (0.2, 0.5), 'calm': (-0.15, 0.38),
          'aside': (-0.2, 0.4)}
 ASIDE_GAIN = 0.85       # the host stepping out of the story: a touch quieter and more matter-of-fact
 WHISPER_GAIN = 0.5       # about -6 dB: Chatterbox cannot whisper, so hushed lines are quieter
@@ -139,18 +146,31 @@ def _split_long(sentence, limit):
 
 
 def pieces(script, limit=MAX_CHARS):
-    """[(cue, text, pause_before)] small enough for Chatterbox to read reliably."""
+    """[(cue, text, pause_before, new_paragraph)]: one sentence each (long ones split at commas),
+    so every sentence gets its own beat instead of being rushed together."""
     result = []
-    for cue, sentence, pause in delivery.segments(script):
+    for cue, sentence, pause, paragraph in delivery.sentences(script):
         for index, part in enumerate(_split_long(sentence, limit)):
             first = index == 0
-            previous = result[-1] if result else None
-            if (first and not pause and previous and previous[0] == cue
-                    and re.search(r'[.!?…"”]$', previous[1]) and len(previous[1]) + len(part) + 1 <= limit):
-                result[-1] = (cue, previous[1] + ' ' + part, previous[2])
-            else:
-                result.append((cue, part, pause and first))
+            result.append((cue, part, pause and first, paragraph and first))
     return result
+
+
+def gap_before(plan, number, period_pause, rng):
+    """Seconds of silence before piece `number` (1-based) of the plan."""
+    cue, text, pause, paragraph = plan[number - 1]
+    previous = plan[number - 2][1]
+    if pause:
+        gap = PAUSE_SECONDS
+    elif paragraph:
+        gap = PARAGRAPH_SECONDS
+    elif re.search(r'[.!?…"”]$', previous):
+        gap = period_pause + SENTENCE_EXTRA + (QUESTION_EXTRA if re.search(r'[!?…]["”]?$', previous) else 0)
+    else:
+        return SOFT_GAP
+    if number > len(plan) * (1 - ENDING_SHARE):
+        gap *= ENDING_SLOWER
+    return round(gap * rng.uniform(0.88, 1.15), 3)   # people never pause like a metronome
 
 
 def align_word(word):
@@ -292,7 +312,7 @@ class Narrator:
             wav = self.model.generate(text)
         else:
             shift, cfg = STYLE.get(cue, STYLE[None])
-            exaggeration = min(2.0, max(0.25, base + shift))
+            exaggeration = min(MAX_EXAGGERATION, max(0.25, base + shift))
             wav = self.model.generate(text, exaggeration=exaggeration, cfg_weight=cfg)
         return wav.squeeze(0).detach().cpu().numpy().astype('float32')
 
@@ -339,13 +359,18 @@ class Narrator:
         clip_path = resolve_clip(clip)
         self.use_voice(clip_path, expressiveness)
 
+        import random
+        rng = random.Random(seed)
         parts, words, chunks, warnings = [], [], [], []
         offset = 0.0
         plan = pieces(script)
-        for number, (cue, text, pause) in enumerate(plan, 1):
-            if (pause or (cue == 'aside' and (number == 1 or plan[number - 2][0] != 'aside'))) and parts:
-                parts.append(silence(PAUSE_SECONDS))
-                offset += PAUSE_SECONDS
+        if not body_only and not title_present and len(plan) > 1:
+            plan[1] = (*plan[1][:3], True)        # a breath after the title
+        for number, (cue, text, pause, paragraph) in enumerate(plan, 1):
+            if number > 1:
+                gap = gap_before(plan, number, period_pause, rng)
+                parts.append(silence(gap))
+                offset += gap
             wav, timings, warning = self.speak(text, cue, expressiveness, seed + number)
             if cue == 'whisper':
                 wav = wav * WHISPER_GAIN
@@ -359,10 +384,6 @@ class Narrator:
             chunks.append({'text': text, 'cue': cue, 'start': round(offset, 4), 'end': round(offset + duration, 4)})
             parts.append(wav)
             offset += duration
-            gap = period_pause + 0.15 if re.search(r'[.!?…"”]$', text) else SOFT_GAP
-            if number < len(plan):
-                parts.append(silence(gap))
-                offset += gap
             if number % 10 == 0 or number == len(plan):
                 print(f'Spoke {number}/{len(plan)} pieces; {offset:.1f} seconds so far.', file=sys.stderr, flush=True)
         if not parts:

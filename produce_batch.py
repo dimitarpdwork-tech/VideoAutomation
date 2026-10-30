@@ -33,6 +33,7 @@ from voice_selection import select_clip, select_voice
 
 ROOT = Path(__file__).resolve().parent
 SHORTS_LIMIT = 179
+FULL_ENDING = 3.5   # make_video.END_HOLD: full videos end with a few seconds of music and a fade
 MAX_SPEEDUP = 1.2
 WORDS_PER_SECOND = 2.6
 WORD_RE = r"\b\w+(?:['’\-]\w+)*\b"
@@ -251,7 +252,10 @@ def run_narration(source, output, config, voice=None, clip=None, item=None, body
     return read_json(output / 'metadata.json')
 
 
-HOST_GAP = 0.9   # seconds of silence either side of the host's lines
+# Seconds of silence around the host, so it is always clear where the story stops and starts:
+# the music swaps during these silences.
+BEFORE_INTRO, AFTER_INTRO, BEFORE_OUTRO = 2.0, 1.8, 3.2
+HOST_GAP = BEFORE_INTRO   # kept for older callers
 
 
 def narrate_framed(story, base, config, item, host_clip):
@@ -265,14 +269,17 @@ def narrate_framed(story, base, config, item, host_clip):
     output.mkdir(parents=True, exist_ok=True)
     words, chunks, spans, script, frames = [], [], [], [], []
     offset, params, first_meta = 0.0, None, None
-    for number, (speaker, text) in enumerate(narrator_persona.segments(story)):
+    parts = narrator_persona.segments(story)
+    for number, (speaker, text) in enumerate(parts):
         part_story, part_dir = base / f'part_{number}.json', base / f'part_{number}'
         write_json(part_story, {**{k: v for k, v in story.items() if k not in ('intro', 'outro')}, 'text': text})
         clip = host_clip if speaker == 'host' else item.get('voice_clip')
         meta = run_narration(part_story, part_dir, config, item.get('voice'), clip, item, body_only=number > 0)
         first_meta = first_meta or meta
         if number:
-            gap = HOST_GAP if speaker == 'host' or chunks and chunks[-1].get('speaker') == 'host' else 0.4
+            last = number == len(parts) - 1
+            gap = (BEFORE_OUTRO if speaker == 'host' and last and number > 1 else BEFORE_INTRO if speaker == 'host'
+                   else AFTER_INTRO if chunks and chunks[-1].get('speaker') == 'host' else 0.6)
             frames.append(gap)
             offset += gap
         with wave.open(str(part_dir / 'narration.wav'), 'rb') as audio:
@@ -526,7 +533,7 @@ def produce_full(item, config, channel_paths, batch, dest):
     full_name = item['name'] + '_full.mp4'
     render(base / 'full', item, config, dest, full_name, 'landscape')
     full_meta = read_json(base / 'full' / 'metadata.json')
-    validate(dest / full_name, full_meta['duration_seconds'])
+    validate(dest / full_name, full_meta['duration_seconds'] + FULL_ENDING)
     thumb = dest / (item['name'] + '_full.jpg')
     picture = ['--image', str(ROOT / item['image'])] if item.get('image') else \
         ['--video', str(ROOT / 'backgrounds' / (item.get('background') or ''))]
