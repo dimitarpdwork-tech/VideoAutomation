@@ -1,8 +1,10 @@
 """Ask Claude for a JSON object reliably.
 
-The reply comes back through a forced tool call, so it is always a JSON object
-rather than free text that has to be parsed. When something still goes wrong,
-the error says why: cut off for length, a refusal, or text without a story.
+Uses Claude's structured outputs (output_config.format with a JSON schema), so
+the reply always matches the schema. If the API refuses the schema for the
+chosen model, it asks once more without it and reads the JSON from the text.
+When something goes wrong, the error says why: cut off for length, declined,
+or text without a story.
 """
 import json
 
@@ -11,24 +13,39 @@ class ReplyError(RuntimeError):
     pass
 
 
-TOOL = {'name': 'submit', 'description': 'Submit the requested JSON object.',
-        'input_schema': {'type': 'object', 'additionalProperties': True}}
+_SCHEMALESS_MODELS = set()   # models that refused structured outputs in this run
 
 
-def ask(client, model, prompt, system=None, max_tokens=4000):
-    """Return the reply as text '<json>{...}</json>' (callers parse it the same way as before)."""
-    kwargs = {'model': model, 'max_tokens': max_tokens, 'messages': [{'role': 'user', 'content': prompt}],
-              'tools': [TOOL], 'tool_choice': {'type': 'tool', 'name': 'submit'}}
+def strict(properties, required=None):
+    """A JSON schema object as structured outputs require: no extra properties."""
+    return {'type': 'object', 'properties': properties, 'required': list(required or properties),
+            'additionalProperties': False}
+
+
+def _request(client, model, prompt, system, max_tokens, schema):
+    kwargs = {'model': model, 'max_tokens': max_tokens, 'messages': [{'role': 'user', 'content': prompt}]}
     if system:
         kwargs['system'] = system
-    response = client.messages.create(**kwargs)
+    if schema is not None:
+        # extra_body works with every version of the Python SDK.
+        kwargs['extra_body'] = {'output_config': {'format': {'type': 'json_schema', 'schema': schema}}}
+    return client.messages.create(**kwargs)
+
+
+def ask(client, model, prompt, system=None, max_tokens=4000, schema=None):
+    """Return the reply text, which holds one JSON object."""
+    use_schema = schema if model not in _SCHEMALESS_MODELS else None
+    try:
+        response = _request(client, model, prompt, system, max_tokens, use_schema)
+    except Exception as exc:  # the API refused the schema: ask without it
+        message = str(exc)
+        if use_schema is None or getattr(exc, 'status_code', None) != 400 or not any(
+                word in message for word in ('output_config', 'json_schema', 'schema', 'format')):
+            raise
+        _SCHEMALESS_MODELS.add(model)
+        response = _request(client, model, prompt, system, max_tokens, None)
     stop = getattr(response, 'stop_reason', None)
     blocks = list(getattr(response, 'content', []) or [])
-    for block in blocks:
-        if getattr(block, 'type', '') == 'tool_use' and isinstance(getattr(block, 'input', None), dict):
-            if stop == 'max_tokens':
-                raise ReplyError('the reply was cut off because it was too long')
-            return '<json>' + json.dumps(block.input, ensure_ascii=False) + '</json>'
     text = ''.join(getattr(block, 'text', '') for block in blocks if getattr(block, 'type', '') == 'text')
     if stop == 'max_tokens':
         raise ReplyError('the reply was cut off because it was too long')
@@ -37,4 +54,6 @@ def ask(client, model, prompt, system=None, max_tokens=4000):
     if '{' not in text:
         snippet = ' '.join(text.split())[:160]
         raise ReplyError(f'the reply had no story in it ("{snippet}")' if snippet else 'the reply was empty')
+    if text.lstrip().startswith('{'):
+        return '<json>' + text.strip() + '</json>'
     return text

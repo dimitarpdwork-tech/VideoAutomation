@@ -117,7 +117,7 @@ Invent the character behind that voice: who they are, how they talk, how they op
 original fiction (never claim the stories are true). Keep it subtle and atmospheric, never campy. The host must not
 name a real person or claim a real-world identity.
 
-Return one JSON object through the submit tool, with these fields:
+Reply with one JSON object with these fields:
 "name": a short behind-the-scenes label such as "The Caretaker",
 "identity": 1-2 sentences on who the host is,
 "speech": 2-3 sentences on vocabulary, sentence length, rhythm, verbal habits and what they never do,
@@ -133,9 +133,15 @@ Return one JSON object through the submit tool, with these fields:
 def draft(description, config, client):
     """A persona dict drafted by Claude from the voice description."""
     import claude_json
+    s = {'type': 'string'}
+    schema = claude_json.strict({'name': s, 'identity': s, 'speech': s, 'intro': s, 'outro': s,
+                                 'asides': {'type': 'string', 'enum': list(ASIDES)},
+                                 'gender': {'type': 'string', 'enum': ['male', 'female', 'any']}, 'age': s,
+                                 'expressiveness': {'type': 'number'},
+                                 'voice_character': {'type': 'string', 'enum': ['natural', 'deep', 'uncanny', 'tape', 'room']}})
     text = claude_json.ask(client, config.get('generator_model') or 'claude-sonnet-5-5',
                            DRAFT_PROMPT.format(channel=config.get('name') or 'the channel', description=description),
-                           max_tokens=2000)
+                           max_tokens=2000, schema=schema)
     match = re.search(r'<json>\s*(\{.*\})\s*</json>', text, re.S) or re.search(r'(\{.*\})', text, re.S)
     if not match:
         raise RuntimeError('The reply contained no persona.')
