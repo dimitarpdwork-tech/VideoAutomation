@@ -36,6 +36,7 @@ REFERENCE_TEXT = ('I have always liked the quiet hours, when the house settles a
 def kokoro(text, voice, folder):
     """Narrate text with Kokoro into folder; return the wav path."""
     import narrate
+    folder.mkdir(parents=True, exist_ok=True)
     story = folder / 'story.json'
     story.write_text(json.dumps({'title': '', 'text': text}), encoding='utf-8')
     argv = sys.argv

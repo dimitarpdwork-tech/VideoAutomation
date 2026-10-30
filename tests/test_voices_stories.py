@@ -392,3 +392,22 @@ class RetentionTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class VoiceSampleTests(unittest.TestCase):
+    def test_samples_run_end_to_end_with_a_stand_in_voice(self):
+        import voice_samples
+
+        def fake_narrate():
+            out = Path(sys.argv[sys.argv.index('--output') + 1])
+            out.mkdir(parents=True, exist_ok=True)
+            (out / 'narration.wav').write_bytes(b'RIFF')
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            with patch.object(voice_samples.cb, 'VOICES', folder / 'voices'), \
+                    patch.object(voice_samples.cb, 'SAMPLES', folder / 'samples'), \
+                    patch('narrate.main', fake_narrate), patch.object(voice_samples.voice_worker, 'installed', return_value=False):
+                voice_samples.main()
+            self.assertEqual(len(list((folder / 'voices').glob('starter_*.wav'))), 5)
+            index = json.loads((folder / 'samples/index.json').read_text())
+            self.assertEqual(len(index), 5)
