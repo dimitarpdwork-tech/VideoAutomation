@@ -377,17 +377,18 @@ def outline_schema(persona=None):
 
 def ask_model(client, model, prompt, length, system=None, max_tokens=None, structured=True, schema=None):
     """Claude's reply as text. Structured replies (JSON) follow `schema` via structured outputs."""
-    max_tokens = max_tokens or {'full': 8000, 'long': 6000}.get(length, 2500)
+    # Generous budgets: the model may think before writing, and only tokens actually produced are billed.
+    max_tokens = max_tokens or {'full': 32000, 'long': 24000}.get(length, 16000)
     try:
         if structured:
             return claude_json.ask(client, model, prompt, system or BASE_RULES, max_tokens,
                                    schema or story_schema(length))
-        response = client.messages.create(model=model, max_tokens=max_tokens, system=system or BASE_RULES,
-                                          messages=[{'role': 'user', 'content': prompt}])
+        response = claude_json.send(client, {'model': model, 'max_tokens': max_tokens, 'system': system or BASE_RULES,
+                                             'messages': [{'role': 'user', 'content': prompt}]})
     except claude_json.ReplyError as exc:
         raise GenerationError(str(exc)) from exc
     if getattr(response, 'stop_reason', None) == 'max_tokens':
-        raise GenerationError('the reply was cut off because it was too long')
+        raise GenerationError(str(claude_json.cut_off(response)))
     return ''.join(block.text for block in response.content if getattr(block, 'type', '') == 'text')
 
 
@@ -408,7 +409,7 @@ def write_long(client, model, config, low, high, own, reddit, avoid, feedback, l
                  if narrator_persona.active(config) else '') + '.']
     if feedback:
         lines.append(f'\nThe previous attempt was rejected: {feedback}. Choose something clearly different.')
-    outline = _json(ask_model(client, model, '\n'.join(lines), 'long', system, 4000,
+    outline = _json(ask_model(client, model, '\n'.join(lines), 'long', system, 16000,
                               schema=outline_schema(narrator_persona.active(config))))
     plan = outline.get('chapters') or []
     if not isinstance(plan, list) or len(plan) < 2:
@@ -429,7 +430,7 @@ def write_long(client, model, config, low, high, own, reddit, avoid, feedback, l
             'Continue seamlessly; no chapter heading, no recap of earlier chapters'
             + ('; bring the story to a soft, settled close.' if number == len(plan) else '.'),
             'Reply with the chapter text only, inside <text></text> tags.'])
-        reply = ask_model(client, model, prompt, 'long', system, max(4000, per_chapter * 3), structured=False)
+        reply = ask_model(client, model, prompt, 'long', system, max(16000, per_chapter * 6), structured=False)
         match = re.search(r'<text>(.*?)</text>', reply, re.S)
         chapter_text = (match.group(1) if match else reply).strip()
         if len(_words(chapter_text)) < per_chapter * 0.4:

@@ -29,7 +29,25 @@ def _request(client, model, prompt, system, max_tokens, schema):
     if schema is not None:
         # extra_body works with every version of the Python SDK.
         kwargs['extra_body'] = {'output_config': {'format': {'type': 'json_schema', 'schema': schema}}}
+    return send(client, kwargs)
+
+
+def send(client, kwargs):
+    """Stream real API calls (the SDK requires it for large max_tokens); plain create() for test doubles."""
+    try:
+        import anthropic
+        real = isinstance(client, anthropic.Anthropic)
+    except ImportError:
+        real = False
+    if real:
+        with client.messages.stream(**kwargs) as stream:
+            return stream.get_final_message()
     return client.messages.create(**kwargs)
+
+
+def cut_off(response):
+    used = getattr(getattr(response, 'usage', None), 'output_tokens', None)
+    return ReplyError('the reply was cut off because it was too long' + (f' ({used:,} tokens)' if used else ''))
 
 
 def ask(client, model, prompt, system=None, max_tokens=4000, schema=None):
@@ -48,7 +66,7 @@ def ask(client, model, prompt, system=None, max_tokens=4000, schema=None):
     blocks = list(getattr(response, 'content', []) or [])
     text = ''.join(getattr(block, 'text', '') for block in blocks if getattr(block, 'type', '') == 'text')
     if stop == 'max_tokens':
-        raise ReplyError('the reply was cut off because it was too long')
+        raise cut_off(response)
     if stop == 'refusal':
         raise ReplyError('Claude declined to write this one')
     if '{' not in text:

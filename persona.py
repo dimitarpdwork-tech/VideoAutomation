@@ -141,7 +141,7 @@ def draft(description, config, client):
                                  'voice_character': {'type': 'string', 'enum': ['natural', 'deep', 'uncanny', 'tape', 'room']}})
     text = claude_json.ask(client, config.get('generator_model') or 'claude-sonnet-5-5',
                            DRAFT_PROMPT.format(channel=config.get('name') or 'the channel', description=description),
-                           max_tokens=2000, schema=schema)
+                           max_tokens=16000, schema=schema)
     match = re.search(r'<json>\s*(\{.*\})\s*</json>', text, re.S) or re.search(r'(\{.*\})', text, re.S)
     if not match:
         raise RuntimeError('The reply contained no persona.')
