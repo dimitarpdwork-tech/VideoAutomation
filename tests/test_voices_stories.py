@@ -595,7 +595,7 @@ class ImageEnvironmentTests(unittest.TestCase):
                                           'src': {'original': 'https://images.pexels.com/photos/7/p.jpeg'}}]}).encode()
         with patch.object(image_picker, '_get', return_value=(payload, 'application/json')):
             result = image_picker.search_pexels('dark house', 'landscape', 'key')[0]
-        self.assertEqual(result['url'], 'https://images.pexels.com/photos/7/p.jpeg?auto=compress&cs=tinysrgb&w=2560')
+        self.assertEqual(result['url'], 'https://images.pexels.com/photos/7/p.jpeg?auto=compress&cs=tinysrgb&w=3840')
 
     def test_without_pillow_the_search_runs_in_the_video_environment(self):
         import builtins
