@@ -996,3 +996,24 @@ class RemakeTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, 'already uploaded'):
             produce_batch.release_for_remake('gen_1_used.json', 'night', self.cp)
         self.assertTrue((self.cp['stories'] / 'gen_1_used.json').is_file())
+
+
+class UsageRepairTests(RemakeTests):
+    def test_remake_keeps_every_other_story_in_the_usage_list(self):
+        usage = channels.read_json(channels.SHARED / 'story_usage.json')
+        usage['other'] = {'channel': 'night', 'batch': 'b9', 'status': 'complete'}
+        channels.write_json(channels.SHARED / 'story_usage.json', usage)
+        produce_batch.release_for_remake('gen_1_used.json', 'night', self.cp)
+        self.assertEqual(channels.read_json(channels.SHARED / 'story_usage.json'),
+                         {'other': {'channel': 'night', 'batch': 'b9', 'status': 'complete'}})
+
+    def test_a_damaged_usage_list_is_rebuilt_from_the_batches(self):
+        channels.write_json(channels.SHARED / 'story_usage.json', {'channel': 'night', 'batch': 'b1', 'status': 'complete'})
+        channels.write_json(self.cp['videos'] / 'b2/batch.json', [{'name': '01_x', 'story': 'x.json', 'story_hash': 'hx', 'status': 'complete'}])
+        channels.write_json(self.cp['videos'] / 'b3/batch.json', [{'name': '01_y', 'story': 'y.json', 'story_hash': 'hy', 'status': 'complete',
+                                                                   'review_note': 'Replaced by a remake'}])
+        usage = channels.story_usage()
+        self.assertEqual(usage['hx'], {'channel': 'night', 'batch': 'b2', 'status': 'complete', 'story_id': 'x'})
+        self.assertIn(self.hash, usage)              # b1's story still has its video
+        self.assertNotIn('hy', usage)                # a replaced video does not lock its story
+        self.assertEqual(channels.read_json(channels.SHARED / 'story_usage.json'), usage)

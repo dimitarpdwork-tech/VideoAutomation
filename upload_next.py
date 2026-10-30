@@ -21,7 +21,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from channel_config import (paths, load_channel, credentials_for, lock, SHARED, read_json, write_json,
+from channel_config import (paths, load_channel, story_usage, credentials_for, lock, SHARED, read_json, write_json,
                             update_json, PRIVACY_OPTIONS)
 
 ROOT = Path(__file__).resolve().parent
@@ -291,7 +291,7 @@ def run(channel='main', dry_run=False, publish_at=None, folder=None):
     shared = read_json(SHARED / 'video_uploads.json', {})
     if digest in shared and shared[digest].get('channel') != channel:
         raise RuntimeError('This exact video was uploaded or claimed by another channel. Nothing uploaded.')
-    usage = read_json(SHARED / 'story_usage.json', {})
+    usage = story_usage()
     if item.get('story_hash') in usage and usage[item['story_hash']]['channel'] != channel:
         raise RuntimeError('This story is assigned to another channel. Nothing uploaded.')
     print(f"Channel: {config['name']} ({config.get('youtube_channel_id') or 'not connected'})", flush=True)

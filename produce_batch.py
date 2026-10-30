@@ -27,7 +27,7 @@ import persona as narrator_persona
 import speech
 import variety
 import voice_worker
-from channel_config import (paths, load_channel, lock, SHARED, read_json, write_json, update_json,
+from channel_config import (paths, load_channel, story_usage, lock, SHARED, read_json, write_json, update_json,
                             story_fingerprint, venv_python, CHANNELS)
 from voice_selection import select_clip, select_voice
 
@@ -598,7 +598,7 @@ def main():
     if not re.fullmatch(r'[a-zA-Z0-9_-]+', batch):
         parser.error('Invalid batch name')
     dest = channel_paths['videos'] / batch
-    usage = read_json(SHARED / 'story_usage.json', {})
+    usage = story_usage()
     background_dir = ROOT / 'backgrounds'
     backgrounds = ([background_dir / name for name in config['backgrounds']] if config['backgrounds']
                    else sorted(background_dir.glob('*.mp4')))
@@ -737,7 +737,10 @@ def release_for_remake(name, channel, channel_paths):
                         row['review'] = 'rejected'
                         row['review_note'] = 'Replaced by a remake'
             update_json(plan_path, replace, [])
-    update_json(SHARED / 'story_usage.json', lambda rows: rows.pop(fingerprint, None), {})
+    def forget(rows):
+        rows.pop(fingerprint, None)          # returns None, so the rest of the file is kept
+    story_usage()                            # repair first, if an earlier version damaged it
+    update_json(SHARED / 'story_usage.json', forget, {})
     if used.is_file() and not source.is_file():
         used.rename(source)
     print(f'Remaking the video for "{story.get("title", plain)}" with the current settings.', flush=True)
