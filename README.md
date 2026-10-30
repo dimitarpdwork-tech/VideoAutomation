@@ -197,7 +197,9 @@ narrated horror and sleep channels.
   farmhouse at night"); otherwise the channel's image search phrases are used.
 - Sources: [Pexels](https://www.pexels.com/api/) with a free API key (Settings),
   then [Openverse](https://openverse.org), limited to public-domain (CC0/PDM)
-  images. Both allow use in monetised videos without credit.
+  images. Both allow use in monetised videos. Pexels' API guidelines ask for a
+  link back where possible, so videos with a Pexels photo get one line at the
+  end of the description ("Background photo by … on Pexels: link").
 - Every photo is used once across all channels. Where it came from is kept in
   `output/shared/images_used.json` and shown in Review.
 - If no photo is found and the channel also has background clips, a clip is

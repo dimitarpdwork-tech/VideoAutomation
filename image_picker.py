@@ -37,6 +37,20 @@ class NoImage(RuntimeError):
     pass
 
 
+def credit_line(image_path):
+    """A one-line credit for the description, when the image's source asks for one.
+
+    Pexels' licence needs no credit, but its API guidelines ask apps to link to
+    Pexels and credit the photographer where possible. Openverse CC0/public-domain
+    images need nothing.
+    """
+    record = read_json(Path(image_path).with_suffix('.json'), {}) or {}
+    if record.get('source') != 'Pexels':
+        return ''
+    who = f" by {record['author']}" if record.get('author') else ''
+    return f"Background photo{who} on Pexels: {record.get('page') or 'https://www.pexels.com'}"
+
+
 def pexels_key():
     key = os.environ.get('PEXELS_API_KEY', '').strip()
     if not key and KEY_FILE.is_file():

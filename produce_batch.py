@@ -270,6 +270,11 @@ def ensure_image(item, config, story):
             return
         raise
     item['image'] = path.relative_to(ROOT).as_posix()
+    credit = image_picker.credit_line(path)
+    if credit:
+        for field in ('description', 'full_description'):
+            if item.get(field) and credit not in item[field]:
+                item[field] = item[field].rstrip() + '\n\n' + credit
 
 
 def background_args(item):

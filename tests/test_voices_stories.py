@@ -231,6 +231,7 @@ class ImageTests(unittest.TestCase):
         self.assertEqual(json.loads(first.with_suffix('.json').read_text())['id'], 'pexels:1')
         self.assertEqual(json.loads(second.with_suffix('.json').read_text())['id'], 'pexels:2')
         self.assertEqual(image_picker.pick({}, config, 'night', 'story_a', searchers=[]), first)   # reused for the same story
+        self.assertEqual(image_picker.credit_line(first), 'Background photo by A on Pexels: https://pexels.com/1')
 
     def test_clear_error_when_nothing_is_found(self):
         def offline(query):
