@@ -410,16 +410,17 @@ export async function uploadNext(id = 'main') {
   return {started: true};
 }
 
-export async function produce(id, count, story) {
+export async function produce(id, count, story, remake = false) {
   const data = await snapshot(id);
   if (story !== undefined && story !== null) {
-    if (typeof story !== 'string' || !/^[A-Za-z0-9_.-]{1,120}\.json$/.test(story) || /_(used|review)\.json$/.test(story)) throw Error('Choose an unused story.');
+    if (typeof story !== 'string' || !/^[A-Za-z0-9_.-]{1,120}\.json$/.test(story) || /_review\.json$/.test(story)
+        || (!remake && /_used\.json$/.test(story))) throw Error('Choose an unused story.');
     if (!(await exists(path.join(base(id), 'stories', story)))) throw Error('That story was not found.');
     if (data.channel.voice_engine === 'chatterbox' && !data.voiceInstalled) throw Error('The Chatterbox voice is not installed. Run setup_voice first.');
     if (voiceJob.running || designJob.running) throw Error('A voice is still being made. Wait for it to finish.');
     if (production.running || generation.running) throw Error('Something is already running. Wait for it to finish.');
     production.channel = id;
-    start('produce_batch.py', ['--channel', id, '--count', '1', '--story', story], production, true);
+    start('produce_batch.py', ['--channel', id, '--count', '1', remake ? '--remake' : '--story', story], production, true);
     return {started: true};
   }
   if (!Number.isInteger(count) || count < 1 || count > 100) throw Error('Choose between 1 and 100 videos.');

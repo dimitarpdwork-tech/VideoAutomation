@@ -168,7 +168,10 @@ export default function Simple() {
           <button type="button" className="primary big" disabled={busy || making || writing || !story?.ready || !narratorSet}
             onClick={() => act({action: 'produce', count: 1, story: story.file}, 'Making the video. This takes about 10–15 minutes.')}>
             {making ? 'Making the video…' : '🎬 Make the video'}</button>
-          {!making && story?.used && <small>This story already has a video. Write a new story for the next one.</small>}
+          {story?.used && <button type="button" className="big" disabled={busy || making || writing || !narratorSet}
+            onClick={() => act({action: 'produce', count: 1, story: story.file, remake: true}, 'Remaking the video with the current voice, pacing and music. About 10–15 minutes.')}>
+            🔁 Remake this video</button>}
+          {!making && story?.used && <small>Remake uses the same story with the latest voice, pacing and music. The old video is set aside so it is never uploaded.</small>}
           {!narratorSet && <small>Choose a story narrator in step 1 first.</small>}
         </div>
         {making && <p className="simple-note">{lastLine(data.production)}</p>}

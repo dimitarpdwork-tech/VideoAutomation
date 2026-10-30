@@ -51,13 +51,13 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(delivery.remove_marks(script),
                          'Night call. The lights went out. Then the phone rang. It was my own number. I answered.')
 
-    def test_pieces_group_sentences_and_respect_cues(self):
-        script = delivery.to_marks('One. Two. Three. [tense] Four. ' + 'Five, ' * 80 + 'six.')
+    def test_pieces_give_every_sentence_its_own_beat(self):
+        script = delivery.to_marks('One. Two.\n\nThree. [tense] Four. ' + 'Five, ' * 80 + 'six.')
         rows = cb.pieces(script, limit=60)
-        self.assertEqual(rows[0], (None, 'One. Two. Three.', False))
-        self.assertEqual(rows[1][0], 'tense')
-        self.assertTrue(all(len(text) <= 60 for _, text, _ in rows))
-        joined = ' '.join(text for _, text, _ in rows)
+        self.assertEqual(rows[:3], [(None, 'One.', False, False), (None, 'Two.', False, False), (None, 'Three.', False, True)])
+        self.assertEqual(rows[3][0], 'tense')
+        self.assertTrue(all(len(text) <= 60 for _, text, _, _ in rows))
+        joined = ' '.join(text for _, text, _, _ in rows)
         self.assertEqual(joined.split(), delivery.remove_marks(script).split())   # nothing lost or repeated
 
     def test_metadata_and_counts_ignore_cues(self):
@@ -720,7 +720,7 @@ class AudioSafetyTests(unittest.TestCase):
             finally:
                 for p in reversed(extra_patches):
                     p.stop()
-        produce_batch.validate(folder / 'out/x.mp4', 3.0)
+        produce_batch.validate(folder / 'out/x.mp4', 3.0 + produce_batch.FULL_ENDING)   # full videos end with a fade
 
     @staticmethod
     def float_wav_with_nan(path):
@@ -805,15 +805,17 @@ class HostVoiceTests(unittest.TestCase):
                              [('My name is Dan.', 'dan.wav'), ('Come in.', 'host.wav'), ('The car moved.', 'dan.wav'),
                               ('Lights off.', 'host.wav')])
             self.assertEqual([c['body_only'] for c in calls], [False, True, True, True])   # the title is read once
-            gap = produce_batch.HOST_GAP
-            # 4 words, gap, 2 host words, gap, 3 words, gap, 2 host words
-            self.assertAlmostEqual(meta['duration_seconds'], 11 + 3 * gap, places=2)
-            self.assertEqual(meta['host_spans'], [[4 + gap, 6 + gap], [9 + 3 * gap, 11 + 3 * gap]])
+            before, after, outro = produce_batch.BEFORE_INTRO, produce_batch.AFTER_INTRO, produce_batch.BEFORE_OUTRO
+            # 4 words, silence, 2 host words, silence, 3 words, a longer silence, 2 host words
+            self.assertAlmostEqual(meta['duration_seconds'], 11 + before + after + outro, places=2)
+            end_of_intro = 6 + before
+            self.assertEqual(meta['host_spans'], [[4 + before, end_of_intro],
+                                                  [round(end_of_intro + after + 3 + outro, 3), round(11 + before + after + outro, 3)]])
             with wave.open(str(base / 'full/narration.wav')) as audio:
                 self.assertAlmostEqual(audio.getnframes() / audio.getframerate(), meta['duration_seconds'], places=2)
             words = channels.read_json(base / 'full/timings.json')
             self.assertEqual(words[4]['word'], 'Come')
-            self.assertAlmostEqual(words[4]['start'], 4 + gap + 0.1, places=3)
+            self.assertAlmostEqual(words[4]['start'], 4 + before + 0.1, places=3)
 
     def test_without_a_host_voice_the_story_is_told_alone(self):
         import persona
@@ -922,3 +924,75 @@ class ChosenStoryTests(unittest.TestCase):
                 self.assertEqual([item['story'] for item in plan], ['b_new.json'])   # not the shorter one ranked first
                 with self.assertRaisesRegex(RuntimeError, 'cannot be used'):
                     produce_batch.plan_batch(SimpleNamespace(count=1, story='missing.json', channel='night'), config, cp, [], {})
+
+
+class PacingTests(unittest.TestCase):
+    """Pauses like a person telling the story, not a metronome."""
+
+    def plan(self):
+        script = delivery.to_marks('My name is Dan. I work nights.\n\nThe counter clicked. Was it nine? [pause] It read ten.\n\nNobody came out.')
+        return cb.pieces(script)
+
+    def test_paragraphs_and_pauses_get_longer_silences(self):
+        import random
+        plan, rng = self.plan(), random.Random(1)
+        gaps = {plan[n - 1][1]: cb.gap_before(plan, n, 0.35, rng) for n in range(2, len(plan) + 1)}
+        self.assertLess(gaps['I work nights.'], gaps['The counter clicked.'])          # sentence < paragraph
+        self.assertLess(gaps['The counter clicked.'], gaps['It read ten.'])            # paragraph < [pause]
+        self.assertGreater(gaps['Was it nine?'], 0.4)
+        self.assertGreaterEqual(gaps['Nobody came out.'], cb.PARAGRAPH_SECONDS * 0.88 * cb.ENDING_SLOWER - 0.01)   # slower ending
+
+    def test_paragraph_breaks_survive_cleanup(self):
+        script, _, _ = narrate.build_script({'title': 'T', 'text': 'One two.\n\nThree four.'}, True, True)
+        self.assertEqual([row[3] for row in delivery.sentences(script)], [False, False, True])
+        self.assertEqual(delivery.strip(script), 'T. One two. Three four.')
+
+    def test_delivery_never_overacts(self):
+        import inspect
+        self.assertLessEqual(cb.MAX_EXAGGERATION, 0.75)
+        self.assertIn('min(MAX_EXAGGERATION', inspect.getsource(cb.Narrator._generate))
+
+    def test_full_video_ending_matches_the_renderer(self):
+        self.assertEqual(produce_batch.FULL_ENDING, make_video.END_HOLD)
+
+
+class RemakeTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        root = Path(self.temp.name).resolve()
+        self.patches = [patch.object(channels, 'ROOT', root), patch.object(channels, 'CHANNELS', root / 'channels'),
+                        patch.object(channels, 'SHARED', root / 'output/shared'), patch.object(produce_batch, 'SHARED', root / 'output/shared')]
+        for p in self.patches:
+            p.start()
+        channels.create_channel('night', 'Night', 'horror')
+        self.cp = channels.paths('night')
+        self.story = {'title': 'Garage', 'text': 'My name is Dan. ' * 90, 'text_source': 'generated'}
+        channels.write_json(self.cp['stories'] / 'gen_1_used.json', self.story)
+        self.hash = channels.story_fingerprint(self.story['text'])
+        channels.write_json(channels.SHARED / 'story_usage.json', {self.hash: {'channel': 'night', 'batch': 'b1', 'status': 'complete'}})
+        channels.write_json(self.cp['videos'] / 'b1/batch.json', [{'name': '01_gen_1', 'story': 'gen_1.json', 'story_hash': self.hash,
+                                                                   'status': 'complete', 'video': '01_gen_1_teaser.mp4',
+                                                                   'full_video': '01_gen_1_full.mp4', 'review': 'pending'}])
+
+    def tearDown(self):
+        for p in reversed(self.patches):
+            p.stop()
+        self.temp.cleanup()
+
+    def test_remake_unlocks_the_story_and_sets_the_old_video_aside(self):
+        name = produce_batch.release_for_remake('gen_1_used.json', 'night', self.cp)
+        self.assertEqual(name, 'gen_1.json')
+        self.assertTrue((self.cp['stories'] / 'gen_1.json').is_file())
+        self.assertNotIn(self.hash, channels.read_json(channels.SHARED / 'story_usage.json'))
+        old = channels.read_json(self.cp['videos'] / 'b1/batch.json')[0]
+        self.assertEqual((old['review'], old['review_note']), ('rejected', 'Replaced by a remake'))
+        config = channels.load_channel('night')
+        plan = produce_batch.plan_batch(SimpleNamespace(count=1, story=name, channel='night'), config, self.cp, [], {})
+        self.assertEqual(plan[0]['story'], 'gen_1.json')
+
+    def test_an_uploaded_video_is_never_remade(self):
+        channels.write_json(self.cp['credentials'] / 'upload_history.json',
+                            {'x': {'file': str(self.cp['videos'] / 'b1/01_gen_1_full.mp4'), 'status': 'uploaded'}})
+        with self.assertRaisesRegex(SystemExit, 'already uploaded'):
+            produce_batch.release_for_remake('gen_1_used.json', 'night', self.cp)
+        self.assertTrue((self.cp['stories'] / 'gen_1_used.json').is_file())

@@ -65,7 +65,14 @@ Reply with the JSON object only."""
 
 GENRES = {
     'horror': """You write original first-person horror stories for narrated videos, in the tradition of r/nosleep and late-night radio.
-Grounded, plausible and slow-burning: an ordinary person, a specific place, small wrong details that pile up, dread over gore. The ending lingers or turns the story on its head.
+Grounded and plausible: an ordinary person, a specific place, dread over gore.
+Structure every story like this:
+1. The hook, in the narrator's own voice: who they are and the one strange fact that started it.
+2. The ordinary routine, quickly: just enough that the listener knows what normal looks like.
+3. Three wrong details, each clearly stranger and closer than the last. Make each one concrete (a sound, a number, a smell, something moved), never vague.
+4. THE SCARE: one unmistakable moment where the threat shows itself. Slow right down, describe exactly what the narrator sees or hears, in short sentences, with [pause] right before it. A listener must be able to say in one sentence what the scary thing was. "Something felt wrong" or an unexplained feeling is never a scare.
+5. The aftermath, then a last line that turns the story on its head or shows the threat is still there. Put [pause] before the last line.
+Pacing for the ear: paragraphs of two to five sentences separated by blank lines (a blank line is where the narrator takes a breath); start a new paragraph whenever time, place or tension shifts; use short sentences as the tension rises.
 
 Told by a real person: open the way someone would start telling their own story on late-night radio. Within the first two sentences the narrator says their first name and what they do or where they were, woven straight into the hook. For example: "My name is Michael. I've worked nights at the Marlow Street parking garage for eleven years, and last February the gate counter started counting a car that never left." Never "Hi", never a greeting to the audience. Every story has a different name, job and place.""",
     'sleep': """You write calm, slow, richly descriptive stories that help listeners fall asleep, often about history and daily life in the past.

@@ -33,6 +33,7 @@ from voice_selection import select_clip, select_voice
 
 ROOT = Path(__file__).resolve().parent
 SHORTS_LIMIT = 179
+FULL_ENDING = 3.5   # make_video.END_HOLD: full videos end with a few seconds of music and a fade
 MAX_SPEEDUP = 1.2
 WORDS_PER_SECOND = 2.6
 WORD_RE = r"\b\w+(?:['’\-]\w+)*\b"
@@ -251,7 +252,10 @@ def run_narration(source, output, config, voice=None, clip=None, item=None, body
     return read_json(output / 'metadata.json')
 
 
-HOST_GAP = 0.9   # seconds of silence either side of the host's lines
+# Seconds of silence around the host, so it is always clear where the story stops and starts:
+# the music swaps during these silences.
+BEFORE_INTRO, AFTER_INTRO, BEFORE_OUTRO = 2.0, 1.8, 3.2
+HOST_GAP = BEFORE_INTRO   # kept for older callers
 
 
 def narrate_framed(story, base, config, item, host_clip):
@@ -265,14 +269,17 @@ def narrate_framed(story, base, config, item, host_clip):
     output.mkdir(parents=True, exist_ok=True)
     words, chunks, spans, script, frames = [], [], [], [], []
     offset, params, first_meta = 0.0, None, None
-    for number, (speaker, text) in enumerate(narrator_persona.segments(story)):
+    parts = narrator_persona.segments(story)
+    for number, (speaker, text) in enumerate(parts):
         part_story, part_dir = base / f'part_{number}.json', base / f'part_{number}'
         write_json(part_story, {**{k: v for k, v in story.items() if k not in ('intro', 'outro')}, 'text': text})
         clip = host_clip if speaker == 'host' else item.get('voice_clip')
         meta = run_narration(part_story, part_dir, config, item.get('voice'), clip, item, body_only=number > 0)
         first_meta = first_meta or meta
         if number:
-            gap = HOST_GAP if speaker == 'host' or chunks and chunks[-1].get('speaker') == 'host' else 0.4
+            last = number == len(parts) - 1
+            gap = (BEFORE_OUTRO if speaker == 'host' and last and number > 1 else BEFORE_INTRO if speaker == 'host'
+                   else AFTER_INTRO if chunks and chunks[-1].get('speaker') == 'host' else 0.6)
             frames.append(gap)
             offset += gap
         with wave.open(str(part_dir / 'narration.wav'), 'rb') as audio:
@@ -526,7 +533,7 @@ def produce_full(item, config, channel_paths, batch, dest):
     full_name = item['name'] + '_full.mp4'
     render(base / 'full', item, config, dest, full_name, 'landscape')
     full_meta = read_json(base / 'full' / 'metadata.json')
-    validate(dest / full_name, full_meta['duration_seconds'])
+    validate(dest / full_name, full_meta['duration_seconds'] + FULL_ENDING)
     thumb = dest / (item['name'] + '_full.jpg')
     picture = ['--image', str(ROOT / item['image'])] if item.get('image') else \
         ['--video', str(ROOT / 'backgrounds' / (item.get('background') or ''))]
@@ -570,6 +577,7 @@ def main():
     parser.add_argument('--batch', help='Existing batch name to resume')
     parser.add_argument('--max-words', type=int, help='Override the word limit for this batch only')
     parser.add_argument('--story', help='Make the video from this story file only (e.g. gen_123.json)')
+    parser.add_argument('--remake', help='Make this story\'s video again with the current settings (e.g. gen_123_used.json)')
     args = parser.parse_args()
     if not 1 <= args.count <= 100:
         parser.error('count must be between 1 and 100')
@@ -583,6 +591,9 @@ def main():
             parser.error('Invalid max-words override')
         config[key] = args.max_words
     channel_paths = paths(args.channel)
+    if args.remake:
+        args.story = release_for_remake(args.remake, args.channel, channel_paths)
+        args.count = 1
     batch = args.batch or ('batch_' + datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S'))
     if not re.fullmatch(r'[a-zA-Z0-9_-]+', batch):
         parser.error('Invalid batch name')
@@ -692,6 +703,45 @@ def main():
     if failed:
         summary += f' {failed} failed (see batch.json); their stories stay available.'
     print(summary, flush=True)
+
+
+def release_for_remake(name, channel, channel_paths):
+    """Unlock a story that already has a video so it can be made again; return its file name.
+
+    The earlier video is marked as replaced (rejected) so it is never uploaded.
+    A story whose video was already uploaded is not remade.
+    """
+    if not re.fullmatch(r'[A-Za-z0-9_.-]{1,120}\.json', name or ''):
+        raise SystemExit('Invalid story name.')
+    stories = channel_paths['stories']
+    plain = name[:-len('_used.json')] + '.json' if name.endswith('_used.json') else name
+    used = stories / (plain[:-len('.json')] + '_used.json')
+    source = stories / plain
+    if not source.is_file() and not used.is_file():
+        raise SystemExit(f'The story {plain} was not found.')
+    story = read_json(source if source.is_file() else used)
+    fingerprint = story_fingerprint(story['text'])
+    uploaded = {Path(r.get('file', '')).name for r in (read_json(channel_paths['credentials'] / 'upload_history.json', {}) or {}).values()
+                if r.get('status') == 'uploaded'}
+    for plan_path in channel_paths['videos'].glob('*/batch.json'):
+        rows = read_json(plan_path, []) or []
+        mine = [row for row in rows if row.get('story_hash') == fingerprint or Path(row.get('story', '')).stem == Path(plain).stem]
+        for row in mine:
+            outputs = {row.get('video'), row.get('full_video')} - {None}
+            if outputs & uploaded or any(o.replace('.mp4', '_used.mp4') in uploaded for o in outputs) or row.get('full_video_id'):
+                raise SystemExit('This story\'s video was already uploaded to YouTube, so it is not remade. Write a new story.')
+        if mine:
+            def replace(current, names={row.get('name') for row in mine}):
+                for row in current:
+                    if row.get('name') in names and row.get('status') == 'complete':
+                        row['review'] = 'rejected'
+                        row['review_note'] = 'Replaced by a remake'
+            update_json(plan_path, replace, [])
+    update_json(SHARED / 'story_usage.json', lambda rows: rows.pop(fingerprint, None), {})
+    if used.is_file() and not source.is_file():
+        used.rename(source)
+    print(f'Remaking the video for "{story.get("title", plain)}" with the current settings.', flush=True)
+    return plain
 
 
 def finished_files_exist(dest, item):
