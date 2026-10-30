@@ -867,7 +867,7 @@ class MusicTests(unittest.TestCase):
                     patch('music_synth.host_box', return_value=[0.1, 0.0] * 100):
                 horror = {'id': 'night', 'story_category': 'Horror fiction', 'music_volume': 0.1}
                 story, host = produce_batch.music_for(horror)
-                self.assertEqual((story.name, host.name), ('story_drone.wav', 'host_box.wav'))
+                self.assertEqual((story.name, host.name), ('story_music.wav', 'host_box.wav'))
                 self.assertTrue((root / 'channels/night/music/host').is_dir())     # shows where your own tracks go
                 (root / 'channels/night/music/host/jingle.mp3').write_bytes(b'x')
                 self.assertEqual(produce_batch.music_for(horror)[1], root / 'channels/night/music/host')

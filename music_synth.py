@@ -1,7 +1,7 @@
 """Original background music, composed in code: no licences, no Content ID claims.
 
-  story_drone  a very low, slowly breathing drone with a faint high tone that comes
-               and goes: tension under the narration, never a melody to follow.
+  story_music  slow, dark background music for the narration: soft minor-key chord
+               pads, a low bass and sparse echoing piano notes.
   host_box     a bright little music-box tune for the channel host's intro and
                sign-off: cheerful, with a few notes ever so slightly out of tune.
 
@@ -35,36 +35,58 @@ def _write(path, samples):
     return path
 
 
-def _loop(samples, seconds):
-    """Cross-fade the extra tail into the start, giving exactly `seconds` that loop cleanly."""
-    length, overlap = int(seconds * RATE), int(FADE * RATE)
-    body = samples[:length]
-    for i in range(overlap):
-        mix = i / overlap
-        body[i] = body[i] * mix + samples[length + i] * (1 - mix)
-    return body
+# A slow minor-key progression, 8 seconds per chord: A minor, F, D minor, E (the E major
+# chord pulls back to A minor, so the loop never quite settles). Semitones from middle C.
+CHORDS = [(-27, [-3, 0, 4]), (-31, [-7, -3, 0]), (-34, [-10, -7, -3]), (-32, [-8, -4, -1])]
+CHORD_SECONDS = 8.0
+# Sparse, echoing piano notes: (seconds into the loop, semitones from middle C).
+PIANO = [(1.0, 16), (5.2, 12), (9.4, 9), (13.1, 12), (17.6, 14), (21.0, 17), (25.4, 11), (29.2, 8)]
 
 
-def story_drone(seconds=48.0, seed=7):
+def _tone(semitones):
+    return 261.63 * 2 ** (semitones / 12)
+
+
+def story_drone(seed=7):
+    """Dark, slow background music: soft chord pads, a low bass, sparse echoing piano notes."""
     rng = random.Random(seed)
-    total = int((seconds + FADE) * RATE)
+    seconds = CHORD_SECONDS * len(CHORDS)
+    total = int((seconds + FADE + 4) * RATE)
+    out = [0.0] * total
     tau = 2 * math.pi / RATE
-    # (frequency, level, breathing period in seconds, phase)
-    layers = [(55.0, 1.0, 24.0, 0.0), (55.18, 0.35, 31.0, 1.3), (82.4, 0.45, 19.0, 2.1),
-              (110.2, 0.25, 27.0, 0.7), (164.6, 0.12, 13.0, 1.9)]
-    high = (932.3, 0.035, 16.0)   # a thin tone, a tritone-ish shimmer above, fading in and out
-    out, noise = [0.0] * total, 0.0
-    for n in range(total):
-        t = n / RATE
-        value = 0.0
-        for frequency, level, period, phase in layers:
-            value += level * (0.65 + 0.35 * math.sin(2 * math.pi * t / period + phase)) * math.sin(tau * frequency * n)
-        swell = max(0.0, math.sin(2 * math.pi * t / high[2])) ** 3
-        value += high[1] * swell * math.sin(tau * high[0] * n + 0.3 * math.sin(2 * math.pi * t * 0.2))
-        noise = 0.995 * noise + 0.005 * (rng.random() * 2 - 1)   # dark rumble: heavily filtered noise
-        value += noise * 2.2
-        out[n] = value
-    return _loop(out, seconds)
+    for index, (bass, notes) in enumerate(CHORDS):
+        start = index * CHORD_SECONDS
+        length = CHORD_SECONDS + 3.0                     # each chord rings into the next one
+        first = int(start * RATE)
+        voices = [(_tone(bass), 0.55, 0.0)] + [(_tone(n) * detune, 0.16, rng.random() * 6)
+                                                for n in notes for detune in (0.9994, 1.0006)]
+        for i in range(int(length * RATE)):
+            t = i / RATE
+            # Slow swell in, long fade out: pads, not plucks.
+            envelope = min(1.0, t / 2.5) * (min(1.0, (length - t) / 3.0) if t > length - 3.0 else 1.0)
+            breath = 0.85 + 0.15 * math.sin(2 * math.pi * t / 5.5)
+            value = 0.0
+            for frequency, level, phase in voices:
+                value += level * math.sin(tau * frequency * i + phase)
+            target = first + i
+            if target < total:
+                out[target] += value * envelope * breath
+    for at, pitch in PIANO:
+        frequency, first = _tone(pitch), int(at * RATE)
+        for echo, level in ((0.0, 0.32), (0.42, 0.12), (0.84, 0.05)):
+            begin = first + int(echo * RATE)
+            for i in range(int(4.0 * RATE)):
+                if begin + i >= total:
+                    break
+                t = i / RATE
+                envelope = min(1.0, i / 90) * math.exp(-t * 1.4)
+                out[begin + i] += level * envelope * (math.sin(tau * frequency * i) + 0.35 * math.sin(tau * 2 * frequency * i)
+                                                      + 0.1 * math.sin(tau * 3 * frequency * i))
+    # The tail of the last chord and notes rings into the loop start.
+    length = int(seconds * RATE)
+    for i in range(total - length):
+        out[i] += out[length + i]
+    return out[:length]
 
 
 # An original tune: (semitones above middle C, beats). None is a rest. 100 bpm, 4 bars.
@@ -114,7 +136,7 @@ def host_box(seed=3):
 def ensure(folder):
     """Paths of the two generated tracks, creating any that are missing."""
     folder = Path(folder)
-    drone, box = folder / 'story_drone.wav', folder / 'host_box.wav'
+    drone, box = folder / 'story_music.wav', folder / 'host_box.wav'
     if not drone.is_file():
         _write(drone, story_drone())
     if not box.is_file():
@@ -125,7 +147,7 @@ def ensure(folder):
 if __name__ == '__main__':
     from channel_config import SHARED
     target = SHARED / 'music'
-    for path in (target / 'story_drone.wav', target / 'host_box.wav'):
+    for path in (target / 'story_music.wav', target / 'host_box.wav'):
         path.unlink(missing_ok=True)
     for path in ensure(target):
         print(path)
