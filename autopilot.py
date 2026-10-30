@@ -16,11 +16,11 @@ import sys
 
 import produce_batch
 import story_generator
-from channel_config import ROOT, load_channel, paths, read_json, SHARED, story_fingerprint, venv_python
+from channel_config import ROOT, load_channel, paths, read_json, SHARED, story_fingerprint, venv_python, story_usage
 
 
 def eligible_count(channel, config):
-    usage = read_json(SHARED / 'story_usage.json', {})
+    usage = story_usage()
     used_ids = {row.get('story_id') for row in usage.values()}
     count, seen = 0, set()
     for path in paths(channel)['stories'].glob('*.json'):

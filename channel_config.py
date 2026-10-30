@@ -225,6 +225,36 @@ def update_json(path, change, default=None, private=False):
         return data if result is None else result
 
 
+def story_usage():
+    """output/shared/story_usage.json (which story became which video), repaired if damaged.
+
+    Each entry must be {story fingerprint: {channel, batch, status, story_id}}. If the
+    file is not like that, it is rebuilt from every channel's batch.json files, which
+    record the same thing.
+    """
+    path = SHARED / 'story_usage.json'
+    usage = read_json(path, {})
+    if isinstance(usage, dict) and all(isinstance(row, dict) for row in usage.values()):
+        return usage
+    rebuilt = {}
+    for config_path in sorted(CHANNELS.glob('*/config.json')):
+        channel = config_path.parent.name
+        try:
+            videos = paths(channel)['videos']
+        except (ValueError, OSError):
+            continue
+        for plan_path in sorted(videos.glob('*/batch.json')):
+            rows = read_json(plan_path, []) or []
+            for row in rows if isinstance(rows, list) else []:
+                if (isinstance(row, dict) and row.get('story_hash') and row.get('status') == 'complete'
+                        and row.get('review_note') != 'Replaced by a remake'):
+                    rebuilt[row['story_hash']] = {'channel': channel, 'batch': plan_path.parent.name, 'status': 'complete',
+                                                  'story_id': Path(row.get('story', '')).stem}
+    write_json(path, rebuilt)
+    print(f'Repaired the story usage list ({len(rebuilt)} stories with videos).', flush=True)
+    return rebuilt
+
+
 def load_channel(channel='main'):
     if not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,39}', channel):
         raise ValueError('Channel ID must use lowercase letters, numbers, hyphens or underscores.')
