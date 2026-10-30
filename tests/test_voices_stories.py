@@ -617,3 +617,82 @@ class ImageEnvironmentTests(unittest.TestCase):
             with patch.object(builtins, '__import__', no_pillow), patch.object(produce_batch.subprocess, 'run', run):
                 with self.assertRaisesRegex(image_picker.NoImage, 'No unused free image'):
                     produce_batch.pick_image({'title': 'T'}, {'id': 'night'}, {'story': 'gen_1.json'}, 'landscape')
+
+
+class BareEnvironmentTests(unittest.TestCase):
+    """Production runs in the voice environment (.venv-tts or similar), which has no video or image packages.
+
+    These run real code in a fresh Python environment with nothing installed, so a stray import of
+    imageio_ffmpeg or Pillow in production fails here, not on the user's computer.
+    """
+    @classmethod
+    def setUpClass(cls):
+        cls.temp = tempfile.TemporaryDirectory()
+        cls.bare = Path(cls.temp.name) / 'bare'
+        subprocess.run([sys.executable, '-m', 'venv', '--without-pip', str(cls.bare)], check=True)
+        cls.python = cls.bare / ('Scripts/python.exe' if sys.platform == 'win32' else 'bin/python')
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temp.cleanup()
+
+    def test_validate_and_image_step_work_without_video_packages(self):
+        import imageio_ffmpeg
+        video = Path(self.temp.name) / 'clip.mp4'
+        subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=black:s=64x64:d=2',
+                        '-f', 'lavfi', '-i', 'sine=d=2', '-shortest', '-c:v', 'libx264', '-c:a', 'aac', str(video)], check=True)
+        script = textwrap.dedent(f'''
+            import sys
+            sys.path.insert(0, {str(channels.ROOT)!r})
+            import importlib.util
+            assert importlib.util.find_spec('imageio_ffmpeg') is None and importlib.util.find_spec('PIL') is None
+            import produce_batch
+            produce_batch.python = lambda: {sys.executable!r}      # stands in for .venv
+            produce_batch.validate(__import__('pathlib').Path({str(video)!r}), 2.0)
+            print('validate ok')
+        ''')
+        result = subprocess.run([str(self.python), '-c', script], capture_output=True, text=True)
+        self.assertIn('validate ok', result.stdout, result.stderr[-2000:])
+
+    def test_whole_batch_runs_in_a_bare_environment(self):
+        """produce_batch end to end (real FFmpeg renders through .venv), only the voice model stubbed."""
+        import shutil
+        self.project = Path(self.temp.name) / 'project'     # a copy of the program, like an install
+        shutil.copytree(channels.ROOT, self.project, ignore=shutil.ignore_patterns(
+            '.git', 'dashboard', 'tests', 'channels', 'output', 'videos', 'narrations', '.venv*', '__pycache__', '*.mp4'))
+        script = textwrap.dedent(f'''
+            import json, math, struct, sys, wave
+            from pathlib import Path
+            from unittest.mock import patch
+            sys.path.insert(0, {str(self.project)!r})
+            import channel_config as channels, produce_batch, delivery, narrate
+            root = channels.ROOT
+            produce_batch.python = lambda: {sys.executable!r}      # stands in for .venv
+            channels.create_channel('night', 'Night', 'horror')
+            c = channels.load_channel('night'); c.update(voice_engine='kokoro', music_volume=0); channels.write_json(channels.CHANNELS / 'night/config.json', c)
+            (root / 'backgrounds').mkdir(parents=True, exist_ok=True)
+            text = ' '.join(f'Sentence number {{i}} happened on the stairs at night, slowly.' for i in range(40))
+            channels.write_json(channels.paths('night')['stories'] / 'gen_1.json', {{'id': 'gen_1', 'title': 'The stairs', 'text': '[tense] The light was on. ' + text,
+                                 'text_source': 'generated', 'intro': 'Good evening.', 'outro': 'Leave the light off.', 'teaser_sentences': 3}})
+            image = root / 'output/shared/images/night/gen_1.jpg'; image.parent.mkdir(parents=True)
+            import subprocess
+            subprocess.run([{sys.executable!r}, '-c', "from PIL import Image; Image.new('RGB', (2400, 1600), (30, 30, 40)).save(r'" + str(image) + "')"], check=True)
+            def fake_narrate():
+                out = Path(sys.argv[sys.argv.index('--output') + 1]); out.mkdir(parents=True, exist_ok=True)
+                story = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+                script, removed, present = narrate.build_script(story, True, True)
+                words = delivery.remove_marks(script).split()[:60]
+                rate, seconds = 24000, len(words) * 0.3
+                with wave.open(str(out / 'narration.wav'), 'wb') as w:
+                    w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate)
+                    w.writeframes(b''.join(struct.pack('<h', int(3000 * math.sin(i / 9))) for i in range(int(seconds * rate))))
+                (out / 'timings.json').write_text(json.dumps([{{'word': w, 'start': i * 0.3, 'end': i * 0.3 + 0.25}} for i, w in enumerate(words)]))
+                (out / 'metadata.json').write_text(json.dumps({{'duration_seconds': seconds}}))
+            narrate.main = fake_narrate
+            sys.argv = ['produce_batch.py', '--channel', 'night', '--count', '1', '--batch', 'b1']
+            produce_batch.main()
+            plan = channels.read_json(channels.paths('night')['videos'] / 'b1/batch.json')
+            print('STATUS', plan[0]['status'], plan[0].get('reason', ''))
+        ''')
+        result = subprocess.run([str(self.python), '-c', script], capture_output=True, text=True, timeout=900)
+        self.assertIn('STATUS complete', result.stdout, result.stdout[-1500:] + result.stderr[-3000:])

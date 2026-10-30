@@ -331,10 +331,27 @@ def render(narration, item, config, dest, filename, layout):
     subprocess.run(command, check=True)
 
 
+_FFMPEG = None
+
+
+def ffmpeg_exe():
+    """FFmpeg's path. Production may run in the voice environment, which lacks imageio-ffmpeg: ask .venv then."""
+    global _FFMPEG
+    if _FFMPEG:
+        return _FFMPEG
+    try:
+        import imageio_ffmpeg
+        _FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
+    except ImportError:
+        result = subprocess.run([python(), '-c', 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())'],
+                                capture_output=True, text=True, check=True)
+        _FFMPEG = result.stdout.strip().splitlines()[-1]
+    return _FFMPEG
+
+
 def validate(video, expected_seconds=None):
     """Quick integrity check of a finished file: every packet readable, length as expected."""
-    import imageio_ffmpeg
-    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    ffmpeg = ffmpeg_exe()
     check = subprocess.run([ffmpeg, '-v', 'error', '-xerror', '-i', str(video), '-c', 'copy', '-f', 'null', '-'],
                            capture_output=True, text=True, errors='replace')
     if check.returncode:
