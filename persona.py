@@ -88,6 +88,31 @@ def limit_asides(text, persona):
     return re.sub(r'\[\s*aside\s*\]\s*', keep, text, flags=re.I)
 
 
+def segments(story):
+    """[(speaker, text)] for a framed video: the narrator's cold open, the host's intro,
+    the rest of the story, the host's sign-off. Speaker is 'narrator' or 'host'."""
+    text = story.get('text', '').strip()
+    intro, outro = (story.get('intro') or '').strip(), (story.get('outro') or '').strip()
+    if not intro and not outro:
+        return [('narrator', text)]
+    opening, rest = _cold_open(text)
+    parts = [('narrator', opening)]
+    if intro:
+        parts.append(('host', intro))
+    parts.append(('narrator', rest))
+    if outro:
+        parts.append(('host', outro))
+    return [(who, words) for who, words in parts if words.strip()]
+
+
+def _cold_open(text):
+    paragraphs = [p for p in re.split(r'\n\s*\n', text) if p.strip()]
+    if len(paragraphs) > 1:
+        return paragraphs[0], '\n\n'.join(paragraphs[1:])
+    sentences = re.split(r'(?<=[.!?…])\s+', text)
+    return ' '.join(sentences[:2]), ' '.join(sentences[2:])
+
+
 def framed_text(story):
     """Story text with the host's intro after the cold open and the sign-off at the end."""
     text = story.get('text', '').strip()

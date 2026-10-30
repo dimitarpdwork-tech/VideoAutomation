@@ -139,7 +139,7 @@ class GeneratorPipelineTests(unittest.TestCase):
             p.start()
         channels.create_channel('night', 'Night', 'horror')
         self.stories = channels.paths('night')['stories']
-        self.source = ('I work nights at a parking garage downtown. Level four has been closed for a year because of '
+        self.source = ('My name is Dan. I work nights at a parking garage downtown. Level four has been closed for a year because of '
                        'cracks in the concrete. Last Tuesday the camera on level four showed a car with its lights on. ') * 3
         channels.write_json(self.stories / 'r1.json', {'id': 'r1', 'title': 'The closed level of the garage', 'text': self.source,
                                                        'text_source': 'post_page', 'score': 12000, 'url': 'https://reddit.com/r/x'})
@@ -158,7 +158,7 @@ class GeneratorPipelineTests(unittest.TestCase):
     def test_concept_mode_rewrites_the_top_story_once(self):
         retelling = {'title': 'Level four', 'text': self.source, 'narrator': 'male'}
         original = {'title': 'The lighthouse log that kept writing itself',
-                    'text': ('[tense] The logbook had a new entry, and I was the only keeper on the island. '
+                    'text': ('My name is Ada. [tense] The logbook had a new entry, and I was the only keeper on the island. '
                              + ' '.join(f'Night {i}, the lamp turned toward the cliffs instead of the sea.' for i in range(12))),
                     'narrator': 'female', 'image_query': 'lighthouse storm night', 'concept': 'a place that should be empty shows activity'}
         client = MagicMock()
@@ -367,9 +367,10 @@ class ProductionWithChatterboxTests(unittest.TestCase):
                 self.assertEqual(plan[0]['image'], 'output/shared/images/night/gen_1.jpg')
                 self.assertEqual(plan[0]['narration_warnings'], ['Check the line "x"'] * 2)   # full + teaser
                 self.assertEqual({c['expressiveness'] for c in calls}, {0.6})
-                full_story = channels.read_json(calls[0]['story_path'])              # the full video has the host's lines
+                full_story = channels.read_json(calls[0]['story_path'])              # no host voice: no host lines
                 self.assertEqual(Path(calls[0]['story_path']).name, 'full_story.json')
-                self.assertIn('Leave the light off.', full_story['text'])
+                self.assertNotIn('Leave the light off.', full_story['text'])
+                self.assertNotIn('intro', full_story)
                 self.assertNotIn('Leave the light off.', channels.read_json(calls[1]['story_path'])['text'])   # the teaser does not
                 render = next(c for c in commands if 'make_video.py' in str(c[1]))
                 self.assertIn('--image', render)
@@ -512,7 +513,7 @@ class PersonaTests(unittest.TestCase):
         reply = '<json>' + json.dumps({'title': 'Room nine', 'text': text, 'narrator': 'female', 'teaser_sentences': 3,
                                        'intro': 'Come in. ' * 40, 'outro': 'Leave the light off.'}) + '</json>'
         story = story_generator.parse_reply(reply, 'full', self.PERSONA)
-        self.assertEqual(story['text'].count('[aside]'), 2)
+        self.assertNotIn('[aside]', story['text'])                              # the host never interrupts the story
         self.assertEqual(story['narrator_gender'], 'male')                      # the voice decides
         self.assertLessEqual(len(story['intro'].split()), 60)
         self.assertEqual(story['outro'], 'Leave the light off.')
@@ -772,3 +773,83 @@ class AudioSafetyTests(unittest.TestCase):
             probe = subprocess.run([make_video.imageio_ffmpeg.get_ffmpeg_exe(), '-i', str(folder / 'out/x.mp4'), '-af', 'volumedetect',
                                     '-f', 'null', '-'], capture_output=True, text=True)
             self.assertNotIn('mean_volume: -inf', probe.stderr)
+
+
+class HostVoiceTests(unittest.TestCase):
+    """The channel host speaks in a second voice, over the channel's scene, never inside the story."""
+
+    def fake_narration(self, calls):
+        def run_narration(source, output, config, voice=None, clip=None, item=None, body_only=False):
+            calls.append({'text': channels.read_json(source)['text'], 'clip': clip, 'body_only': body_only})
+            output.mkdir(parents=True, exist_ok=True)
+            words = channels.read_json(source)['text'].split()
+            with wave.open(str(output / 'narration.wav'), 'wb') as audio:
+                audio.setnchannels(1); audio.setsampwidth(2); audio.setframerate(24000)
+                audio.writeframes(b'\x01\x00' * 24000 * len(words))          # one second per word
+            channels.write_json(output / 'timings.json', [{'word': w, 'start': i + 0.1, 'end': i + 0.9} for i, w in enumerate(words)])
+            channels.write_json(output / 'chunks.json', [{'text': ' '.join(words), 'cue': None, 'start': 0, 'end': len(words)}])
+            (output / 'script.txt').write_text(' '.join(words), encoding='utf-8')
+            meta = {'duration_seconds': float(len(words)), 'engine': 'chatterbox', 'quality_warnings': []}
+            channels.write_json(output / 'metadata.json', meta)
+            return meta
+        return run_narration
+
+    def test_host_lines_use_the_host_voice_and_are_marked(self):
+        story = {'title': 'T', 'text': 'My name is Dan.\n\nThe car moved.', 'intro': 'Come in.', 'outro': 'Lights off.'}
+        calls = []
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(produce_batch, 'run_narration', self.fake_narration(calls)):
+            base = Path(folder)
+            meta = produce_batch.narrate_framed(story, base, {'voice_engine': 'chatterbox'}, {'voice_clip': 'dan.wav'}, 'host.wav')
+            self.assertEqual([(c['text'], c['clip']) for c in calls],
+                             [('My name is Dan.', 'dan.wav'), ('Come in.', 'host.wav'), ('The car moved.', 'dan.wav'),
+                              ('Lights off.', 'host.wav')])
+            self.assertEqual([c['body_only'] for c in calls], [False, True, True, True])   # the title is read once
+            gap = produce_batch.HOST_GAP
+            # 4 words, gap, 2 host words, gap, 3 words, gap, 2 host words
+            self.assertAlmostEqual(meta['duration_seconds'], 11 + 3 * gap, places=2)
+            self.assertEqual(meta['host_spans'], [[4 + gap, 6 + gap], [9 + 3 * gap, 11 + 3 * gap]])
+            with wave.open(str(base / 'full/narration.wav')) as audio:
+                self.assertAlmostEqual(audio.getnframes() / audio.getframerate(), meta['duration_seconds'], places=2)
+            words = channels.read_json(base / 'full/timings.json')
+            self.assertEqual(words[4]['word'], 'Come')
+            self.assertAlmostEqual(words[4]['start'], 4 + gap + 0.1, places=3)
+
+    def test_without_a_host_voice_the_story_is_told_alone(self):
+        import persona
+        self.assertEqual(persona.segments({'text': 'A.\n\nB.'}), [('narrator', 'A.\n\nB.')])
+
+    def test_host_captions_and_channel_card(self):
+        words = [{'word': w, 'start': i, 'end': i + 0.8} for i, w in enumerate('My name is Dan. Come in. The car moved.'.split())]
+        ass, _ = make_video.build_captions(words, 'landscape', 'phrases', host_spans=[[4, 5.9]], host_name='The Unlit Room')
+        self.assertIn(',Host,,0,0,0,,Come in.', ass)
+        self.assertIn('THE UNLIT ROOM', ass)
+        self.assertIn(',Default,,0,0,0,,The car moved.', ass)
+
+    def test_render_cuts_to_the_scene_while_the_host_speaks(self):
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            narration = folder / 'n'
+            narration.mkdir()
+            with wave.open(str(narration / 'narration.wav'), 'wb') as audio:
+                audio.setnchannels(1); audio.setsampwidth(2); audio.setframerate(24000)
+                audio.writeframes(b''.join(struct.pack('<h', int(4000 * math.sin(i / 9))) for i in range(24000 * 6)))
+            channels.write_json(narration / 'timings.json', [{'word': 'Hi.', 'start': 0.2, 'end': 0.6},
+                                                              {'word': 'Come', 'start': 2.2, 'end': 2.6}])
+            channels.write_json(narration / 'metadata.json', {'duration_seconds': 6.0, 'host_spans': [[2.0, 4.0]]})
+            from PIL import Image
+            Image.new('RGB', (1920, 1080), (200, 200, 200)).save(folder / 'photo.jpg')
+            subprocess.run([sys.executable, str(Path(make_video.__file__)), '--narration', str(narration),
+                            '--image', str(folder / 'photo.jpg'), '--destination', str(folder / 'out'), '--format', 'landscape',
+                            '--filename', 'x.mp4', '--host-name', 'The Unlit Room', '--encoder', 'libx264'],
+                           check=True, capture_output=True)
+            ffmpeg = make_video.imageio_ffmpeg.get_ffmpeg_exe()
+
+            def brightness(second):
+                frame = subprocess.run([ffmpeg, '-v', 'error', '-ss', str(second), '-i', str(folder / 'out/x.mp4'), '-frames:v', '1',
+                                        '-vf', 'scale=64:36,format=gray', '-f', 'rawvideo', '-'], capture_output=True).stdout
+                return sum(frame) / len(frame)
+            self.assertGreater(brightness(1.0), 80)        # the bright story photo
+            self.assertLess(brightness(3.0), 40)           # the dark channel scene
+            self.assertGreater(brightness(5.5), 80)        # back to the story
+            self.assertFalse(list((folder / 'out').glob('_scene_*')))

@@ -45,6 +45,21 @@ def hook_problem(text):
     return None
 
 
+INTRODUCTION = re.compile(r"\b(?:my name(?:'s| is)|name's|i'?m|i am|they call(?:ed)? me|everyone calls me)\s+[A-Z][a-z]+", re.I)
+
+
+def introduction_problem(text):
+    """Why the opening does not sound like a real person introducing themselves, or None."""
+    import delivery
+    opening = ' '.join(re.split(r'(?<=[.!?])\s+', delivery.strip(text or '').strip())[:2])
+    for match in INTRODUCTION.finditer(opening):
+        name = match.group(0).split()[-1]
+        if name[0].isupper():
+            return None
+    return ('the narrator does not introduce themselves: within the first two sentences they must say their first name '
+            'and what they do or where they were (e.g. "My name is Michael. I work nights at the Marlow Street garage...")')
+
+
 def recent_items(channel, limit=RECENT):
     """Titles and openings of the channel's latest planned or uploaded videos."""
     rows = []

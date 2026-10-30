@@ -28,7 +28,7 @@ import speech
 import variety
 import voice_worker
 from channel_config import (paths, load_channel, lock, SHARED, read_json, write_json, update_json,
-                            story_fingerprint, venv_python)
+                            story_fingerprint, venv_python, CHANNELS)
 from voice_selection import select_clip, select_voice
 
 ROOT = Path(__file__).resolve().parent
@@ -214,7 +214,7 @@ def close_worker():
         _WORKER = None
 
 
-def run_narration(source, output, config, voice=None, clip=None, item=None):
+def run_narration(source, output, config, voice=None, clip=None, item=None, body_only=False):
     if config.get('voice_engine') == 'chatterbox':
         if clip is None:
             clip = config.get('voice_clip') or ''
@@ -222,7 +222,7 @@ def run_narration(source, output, config, voice=None, clip=None, item=None):
         try:
             meta = chatterbox().narrate(story_path=source, output=output, clip=clip, speed=config['speed'],
                                         period_pause=config['period_pause'], clean=config.get('clean_language', True),
-                                        expressiveness=config.get('expressiveness', 0.5))
+                                        expressiveness=config.get('expressiveness', 0.5), body_only=body_only)
         except voice_worker.VoiceError as exc:
             if exc.needs_review:
                 raise NeedsReview(str(exc)) from exc
@@ -242,6 +242,62 @@ def run_narration(source, output, config, voice=None, clip=None, item=None):
     except RuntimeError as exc:
         raise NeedsReview(str(exc)) from exc
     return read_json(output / 'metadata.json')
+
+
+HOST_GAP = 0.9   # seconds of silence either side of the host's lines
+
+
+def narrate_framed(story, base, config, item, host_clip):
+    """Narrate each part with its speaker's voice and join them into base/full.
+
+    The metadata gets 'host_spans' ([start, end] seconds), so the video can cut to
+    the channel's scene and caption style while the host speaks.
+    """
+    import wave
+    output = base / 'full'
+    output.mkdir(parents=True, exist_ok=True)
+    words, chunks, spans, script, frames = [], [], [], [], []
+    offset, params, first_meta = 0.0, None, None
+    for number, (speaker, text) in enumerate(narrator_persona.segments(story)):
+        part_story, part_dir = base / f'part_{number}.json', base / f'part_{number}'
+        write_json(part_story, {**{k: v for k, v in story.items() if k not in ('intro', 'outro')}, 'text': text})
+        clip = host_clip if speaker == 'host' else item.get('voice_clip')
+        meta = run_narration(part_story, part_dir, config, item.get('voice'), clip, item, body_only=number > 0)
+        first_meta = first_meta or meta
+        if number:
+            gap = HOST_GAP if speaker == 'host' or chunks and chunks[-1].get('speaker') == 'host' else 0.4
+            frames.append(gap)
+            offset += gap
+        with wave.open(str(part_dir / 'narration.wav'), 'rb') as audio:
+            params = params or audio.getparams()
+            data = audio.readframes(audio.getnframes())
+            length = audio.getnframes() / audio.getframerate()
+        frames.append(data)
+        for word in read_json(part_dir / 'timings.json', []):
+            words.append({**word, 'start': round(word['start'] + offset, 4), 'end': round(word['end'] + offset, 4)})
+        for chunk in read_json(part_dir / 'chunks.json', []):
+            chunks.append({**chunk, 'start': round(chunk['start'] + offset, 4), 'end': round(chunk['end'] + offset, 4),
+                           'speaker': speaker})
+        if speaker == 'host':
+            spans.append([round(offset, 3), round(offset + length, 3)])
+        script.append((part_dir / 'script.txt').read_text(encoding='utf-8'))
+        offset += length
+    with wave.open(str(output / 'narration.wav'), 'wb') as joined:
+        joined.setparams(params)
+        for piece in frames:
+            joined.writeframes(b'\x00' * (round(piece * params.framerate) * params.sampwidth * params.nchannels)
+                               if isinstance(piece, float) else piece)
+    duration = sum(len(p) for p in frames if isinstance(p, bytes)) / (params.framerate * params.sampwidth * params.nchannels) + \
+        sum(p for p in frames if isinstance(p, float))
+    write_json(output / 'timings.json', words)
+    write_json(output / 'chunks.json', chunks)
+    (output / 'script.txt').write_text('\n\n'.join(script), encoding='utf-8')
+    metadata = {**first_meta, 'duration_seconds': round(duration, 3), 'timestamp_count': len(words),
+                'word_count': sum(len(s.split()) for s in script), 'host_spans': spans, 'host_voice_clip': host_clip,
+                'quality_warnings': (item or {}).get('narration_warnings', [])[:5]}
+    write_json(output / 'metadata.json', metadata)
+    print(f'Joined narrator and host voices ({duration:.1f}s, host speaks {len(spans)} time(s)).', flush=True)
+    return metadata
 
 
 def fit_to_shorts(narration, meta):
@@ -311,6 +367,18 @@ def background_args(item):
     return ['--background', str(ROOT / 'backgrounds' / item['background'])]
 
 
+SCENE_TYPES = ('.mp4', '.mov', '.webm', '.mkv', '.m4v', '.jpg', '.jpeg', '.png', '.webp')
+
+
+def host_scene(config):
+    """The channel's own scene for the host's lines: a file named host_scene.* in the channel folder."""
+    folder = CHANNELS / (config.get('id') or 'main')
+    for path in sorted(folder.glob('host_scene.*')) if folder.is_dir() else []:
+        if path.suffix.lower() in SCENE_TYPES:
+            return path
+    return None
+
+
 def render(narration, item, config, dest, filename, layout):
     command = [python(), str(ROOT / 'make_video.py'), '--narration', str(narration), *background_args(item),
                '--destination', str(dest), '--name', item['name'], '--format', layout,
@@ -325,7 +393,11 @@ def render(narration, item, config, dest, filename, layout):
                 '--word-color', config.get('caption_color') or '#FFD400',
                 '--phrase-color', config.get('phrase_color') or '#FFFFFF',
                 '--grade', config.get('color_grade') or 'none',
-                '--voice-character', config.get('voice_character') or 'natural']
+                '--voice-character', config.get('voice_character') or 'natural',
+                '--host-name', config.get('name') or '']
+    scene = host_scene(config)
+    if scene:
+        command += ['--host-scene', str(scene)]
     if (ROOT / 'music').is_dir() and config.get('music_volume', 0) > 0:
         command += ['--music', str(ROOT / 'music'), '--music-volume', str(config['music_volume'])]
     subprocess.run(command, check=True)
@@ -391,12 +463,16 @@ def produce_full(item, config, channel_paths, batch, dest):
     story = read_json(source)
     ensure_image(item, config, story)
     base = channel_paths['narrations'] / source.stem / batch
-    narrated = source
-    if story.get('intro') or story.get('outro'):
-        # Cold open, the host's intro, the story, the host's sign-off (see persona.py).
-        narrated = base / 'full_story.json'
-        write_json(narrated, {**story, 'text': narrator_persona.framed_text(story)})
-    full_meta = run_narration(narrated, base / 'full', config, item.get('voice'), item.get('voice_clip'), item)
+    host_clip = config.get('host_voice_clip') or ''
+    if (story.get('intro') or story.get('outro')) and host_clip and config.get('voice_engine') == 'chatterbox':
+        # Cold open, the host's intro, the story, the host's sign-off, each in its own voice.
+        full_meta = narrate_framed(story, base, config, item, host_clip)
+    else:
+        # Without a separate host voice the host stays silent: a narrator who suddenly talks
+        # about the channel pulls the listener out of the story.
+        plain = base / 'full_story.json'
+        write_json(plain, {key: value for key, value in story.items() if key not in ('intro', 'outro')})
+        full_meta = run_narration(plain, base / 'full', config, item.get('voice'), item.get('voice_clip'), item)
     limit = config.get('max_full_minutes', 15) * 60
     if full_meta['duration_seconds'] > limit:
         raise NeedsReview(f"Full narration is {full_meta['duration_seconds'] / 60:.1f} min; the limit is "

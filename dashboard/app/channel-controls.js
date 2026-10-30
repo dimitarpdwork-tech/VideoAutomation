@@ -78,6 +78,8 @@ function PersonaEditor({data, busy, action}) {
   const c = data.channel;
   const saved = c.persona || {};
   const [draft, setDraft] = useState(saved), [describe, setDescribe] = useState(''), [open, setOpen] = useState(!saved.identity);
+  const [host, setHost] = useState(c.host_voice_clip || '');
+  useEffect(() => setHost(c.host_voice_clip || ''), [c.host_voice_clip]);
   const key = JSON.stringify(saved);
   useEffect(() => setDraft(c.persona || {}), [key]);
   const set = (k, v) => setDraft({...draft, [k]: v});
@@ -105,14 +107,16 @@ function PersonaEditor({data, busy, action}) {
       {field('speech', 'How they talk', 3, 'Short, plain sentences. Calm, dry, never dramatic. Says "now" before something bad happens. Never swears, never jokes.')}
       {field('intro', 'How they open (after the hook)', 2, 'Quiet welcome, e.g. "Come in. Leave the light off. This one happened on a farm…"')}
       {field('outro', 'How they sign off', 2, 'Always ends with "Leave the light off."')}
-      <label>Asides during the story<select value={draft.asides || 'rare'} onChange={e => set('asides', e.target.value)}>
-        <option value="none">None: never interrupts</option><option value="rare">Rare: up to 2 short remarks</option><option value="some">Some: up to 5</option></select></label>
+      <label>Channel host voice<select value={host} onChange={e => setHost(e.target.value)}>
+        <option value="">No host: pure story, no intro or sign-off</option>
+        {(data?.voiceClips ?? []).filter(f => f !== c.voice_clip).map(f => <option key={f} value={f}>{f.replace(/\.[a-z0-9]+$/i, '').replace(/_/g, ' ')}</option>)}</select></label>
     </div>
     <div className="persona-actions">
       <button type="button" className="primary" disabled={busy || !(draft.identity || '').trim()} onClick={() => action({action: 'settings',
-        settings: {...c, persona: {...draft, voice_clip: draft.voice_clip || (c.voice_engine === 'chatterbox' ? c.voice_clip || undefined : undefined)}}})}>Save persona</button>
+        settings: {...c, host_voice_clip: host, persona: {...draft, asides: 'none', voice_clip: draft.voice_clip || (c.voice_engine === 'chatterbox' ? c.voice_clip || undefined : undefined)}}})}>Save persona</button>
       {saved.identity && <button type="button" disabled={busy} onClick={() => action({action: 'settings', settings: {...c, persona: null}})}>Remove persona</button>}
-      <small>Applies to stories generated from now on. Full videos open cold on the hook, then the host's intro; Shorts and teasers stay pure story.</small>
+      <OpenFolder which="channel" label="Channel folder (host scene)" action={action} busy={busy}/>
+      <small>Every story opens with its narrator introducing themselves. With a host voice, full videos cut to the channel's scene while the host welcomes listeners after the hook and signs off at the end, in a different voice from the story. Your own scene: put an image or short video named host_scene (e.g. host_scene.mp4) in the channel's folder. Shorts and teasers stay pure story.</small>
     </div>
   </details>;
 }

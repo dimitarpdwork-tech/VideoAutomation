@@ -53,7 +53,7 @@ WORDS_PER_CHAPTER = 1800
 
 BASE_RULES = """Rules for every story:
 - Original fiction. Invented first names only; no real people, no real tragedies or crimes, brands only in passing.
-- Hook first: the very first sentence (under 25 words) drops the listener into the most gripping moment, fact or question of the story. Never open with greetings, "So", "This happened", "I never believed", "Let me tell you", or any preamble. The title and the first sentence must not repeat each other.
+- Hook first: the opening (under 25 words a sentence) drops the listener into the most gripping moment, fact or question of the story. Never open with greetings, "So", "This happened", "I never believed", "Let me tell you", or any preamble. The title and the first sentence must not repeat each other.
 - Clear escalation and a satisfying payoff near the end.
 - Advertiser-friendly: no graphic violence or gore, no sexual content, no slurs, no self-harm, mild language at most.
 - Written for the ear: short sentences, natural speech, no lists, headings, emojis or Reddit jargon (no AITA, TL;DR, "edit:", ages like "(25F)").
@@ -65,11 +65,15 @@ Reply with the JSON object only."""
 
 GENRES = {
     'horror': """You write original first-person horror stories for narrated videos, in the tradition of r/nosleep and late-night radio.
-Grounded, plausible and slow-burning: an ordinary person, a specific place, small wrong details that pile up, dread over gore. The ending lingers or turns the story on its head.""",
+Grounded, plausible and slow-burning: an ordinary person, a specific place, small wrong details that pile up, dread over gore. The ending lingers or turns the story on its head.
+
+Told by a real person: open the way someone would start telling their own story on late-night radio. Within the first two sentences the narrator says their first name and what they do or where they were, woven straight into the hook. For example: "My name is Michael. I've worked nights at the Marlow Street parking garage for eleven years, and last February the gate counter started counting a car that never left." Never "Hi", never a greeting to the audience. Every story has a different name, job and place.""",
     'sleep': """You write calm, slow, richly descriptive stories that help listeners fall asleep, often about history and daily life in the past.
 Gentle pace, soft sensory detail, no cliffhangers, no violence described, nothing startling. Only state historical facts that are well established and widely known; avoid exact figures and dates unless certain, and describe everyday life impressionistically rather than inventing documented events. Delivery cues: only [pause] and [calm]. The first sentence still invites the listener in, but softly.""",
     'drama': """You write original, realistic first-person stories for narrated storytime videos.
-Everyday realism: families, workplaces, neighbours, weddings, roommates, travel, school, money. Concrete sensory details and a twist or payoff the listener did not see coming.""",
+Everyday realism: families, workplaces, neighbours, weddings, roommates, travel, school, money. Concrete sensory details and a twist or payoff the listener did not see coming.
+
+Told by a real person: open the way someone would start telling their own story on late-night radio. Within the first two sentences the narrator says their first name and what they do or where they were, woven straight into the hook. For example: "My name is Michael. I've worked nights at the Marlow Street parking garage for eleven years, and last February the gate counter started counting a car that never left." Never "Hi", never a greeting to the audience. Every story has a different name, job and place.""",
 }
 
 
@@ -95,7 +99,9 @@ def genre(config):
 
 def system_prompt(config):
     persona = narrator_persona.active(config)
-    block = ('\n\n' + narrator_persona.prompt_block(persona)) if persona else ''
+    # The host never steps into the story in the narrator's voice: listeners lose track of
+    # where the story stops. The host speaks only in the intro and sign-off, in their own voice.
+    block = ('\n\n' + narrator_persona.prompt_block({**persona, 'asides': 'none'})) if persona else ''
     return GENRES[genre(config)] + block + '\n\n' + BASE_RULES
 
 
@@ -321,8 +327,8 @@ def apply_persona(result, data, persona):
 
 def parse_reply(text, length, persona=None):
     data = _json(text)
-    # Shorts have no room for the host stepping out of the story.
-    persona = persona if length == 'full' else ({**persona, 'asides': 'none'} if persona else None)
+    # No asides: the host stepping into the story in the narrator's voice confuses listeners.
+    persona = {**persona, 'asides': 'none'} if persona else None
     title = re.sub(r'\s+', ' ', str(data.get('title', ''))).strip().strip('"')
     story_text = tidy_cues(narrator_persona.limit_asides(str(data.get('text', '')).strip(), persona))
     if not title or len(title) > 100 or re.search(r'[<>]', title):
@@ -501,6 +507,10 @@ def generate(channel, count, length='auto', client=None, log=print, mode='auto')
                     schema = story_schema(length, narrator_persona.active(config), concept=bool(source))
                     candidate = parse_reply(ask_model(client, model, prompt, length, system, schema=schema), length,
                                             narrator_persona.active(config))
+                if genre(config) in ('horror', 'drama'):
+                    problem = variety.introduction_problem(candidate['text'])
+                    if problem:
+                        raise GenerationError(problem)
             except GenerationError as exc:
                 feedback = str(exc)
                 log(f'Story {number}: attempt {attempt} unusable ({exc}).')
