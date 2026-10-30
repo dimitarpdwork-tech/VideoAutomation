@@ -954,3 +954,45 @@ class PacingTests(unittest.TestCase):
 
     def test_full_video_ending_matches_the_renderer(self):
         self.assertEqual(produce_batch.FULL_ENDING, make_video.END_HOLD)
+
+
+class RemakeTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        root = Path(self.temp.name).resolve()
+        self.patches = [patch.object(channels, 'ROOT', root), patch.object(channels, 'CHANNELS', root / 'channels'),
+                        patch.object(channels, 'SHARED', root / 'output/shared'), patch.object(produce_batch, 'SHARED', root / 'output/shared')]
+        for p in self.patches:
+            p.start()
+        channels.create_channel('night', 'Night', 'horror')
+        self.cp = channels.paths('night')
+        self.story = {'title': 'Garage', 'text': 'My name is Dan. ' * 90, 'text_source': 'generated'}
+        channels.write_json(self.cp['stories'] / 'gen_1_used.json', self.story)
+        self.hash = channels.story_fingerprint(self.story['text'])
+        channels.write_json(channels.SHARED / 'story_usage.json', {self.hash: {'channel': 'night', 'batch': 'b1', 'status': 'complete'}})
+        channels.write_json(self.cp['videos'] / 'b1/batch.json', [{'name': '01_gen_1', 'story': 'gen_1.json', 'story_hash': self.hash,
+                                                                   'status': 'complete', 'video': '01_gen_1_teaser.mp4',
+                                                                   'full_video': '01_gen_1_full.mp4', 'review': 'pending'}])
+
+    def tearDown(self):
+        for p in reversed(self.patches):
+            p.stop()
+        self.temp.cleanup()
+
+    def test_remake_unlocks_the_story_and_sets_the_old_video_aside(self):
+        name = produce_batch.release_for_remake('gen_1_used.json', 'night', self.cp)
+        self.assertEqual(name, 'gen_1.json')
+        self.assertTrue((self.cp['stories'] / 'gen_1.json').is_file())
+        self.assertNotIn(self.hash, channels.read_json(channels.SHARED / 'story_usage.json'))
+        old = channels.read_json(self.cp['videos'] / 'b1/batch.json')[0]
+        self.assertEqual((old['review'], old['review_note']), ('rejected', 'Replaced by a remake'))
+        config = channels.load_channel('night')
+        plan = produce_batch.plan_batch(SimpleNamespace(count=1, story=name, channel='night'), config, self.cp, [], {})
+        self.assertEqual(plan[0]['story'], 'gen_1.json')
+
+    def test_an_uploaded_video_is_never_remade(self):
+        channels.write_json(self.cp['credentials'] / 'upload_history.json',
+                            {'x': {'file': str(self.cp['videos'] / 'b1/01_gen_1_full.mp4'), 'status': 'uploaded'}})
+        with self.assertRaisesRegex(SystemExit, 'already uploaded'):
+            produce_batch.release_for_remake('gen_1_used.json', 'night', self.cp)
+        self.assertTrue((self.cp['stories'] / 'gen_1_used.json').is_file())

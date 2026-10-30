@@ -7,7 +7,7 @@ const actions = {
   'create': body => createProfile(body.id, body.name, body.preset),
   'connect': body => connectChannel(body.channel),
   'cancel-connect': body => cancelConnection(body.channel),
-  'produce': body => produce(body.channel, body.count, body.story),
+  'produce': body => produce(body.channel, body.count, body.story, body.remake === true),
   'set-voice': body => setVoice(body.channel, body.role, body.clip),
   'settings': body => saveSettings(body.channel, body.settings),
   'add-story': body => addStory(body.channel, body.title, body.text),

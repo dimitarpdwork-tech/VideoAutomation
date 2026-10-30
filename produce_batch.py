@@ -577,6 +577,7 @@ def main():
     parser.add_argument('--batch', help='Existing batch name to resume')
     parser.add_argument('--max-words', type=int, help='Override the word limit for this batch only')
     parser.add_argument('--story', help='Make the video from this story file only (e.g. gen_123.json)')
+    parser.add_argument('--remake', help='Make this story\'s video again with the current settings (e.g. gen_123_used.json)')
     args = parser.parse_args()
     if not 1 <= args.count <= 100:
         parser.error('count must be between 1 and 100')
@@ -590,6 +591,9 @@ def main():
             parser.error('Invalid max-words override')
         config[key] = args.max_words
     channel_paths = paths(args.channel)
+    if args.remake:
+        args.story = release_for_remake(args.remake, args.channel, channel_paths)
+        args.count = 1
     batch = args.batch or ('batch_' + datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S'))
     if not re.fullmatch(r'[a-zA-Z0-9_-]+', batch):
         parser.error('Invalid batch name')
@@ -699,6 +703,45 @@ def main():
     if failed:
         summary += f' {failed} failed (see batch.json); their stories stay available.'
     print(summary, flush=True)
+
+
+def release_for_remake(name, channel, channel_paths):
+    """Unlock a story that already has a video so it can be made again; return its file name.
+
+    The earlier video is marked as replaced (rejected) so it is never uploaded.
+    A story whose video was already uploaded is not remade.
+    """
+    if not re.fullmatch(r'[A-Za-z0-9_.-]{1,120}\.json', name or ''):
+        raise SystemExit('Invalid story name.')
+    stories = channel_paths['stories']
+    plain = name[:-len('_used.json')] + '.json' if name.endswith('_used.json') else name
+    used = stories / (plain[:-len('.json')] + '_used.json')
+    source = stories / plain
+    if not source.is_file() and not used.is_file():
+        raise SystemExit(f'The story {plain} was not found.')
+    story = read_json(source if source.is_file() else used)
+    fingerprint = story_fingerprint(story['text'])
+    uploaded = {Path(r.get('file', '')).name for r in (read_json(channel_paths['credentials'] / 'upload_history.json', {}) or {}).values()
+                if r.get('status') == 'uploaded'}
+    for plan_path in channel_paths['videos'].glob('*/batch.json'):
+        rows = read_json(plan_path, []) or []
+        mine = [row for row in rows if row.get('story_hash') == fingerprint or Path(row.get('story', '')).stem == Path(plain).stem]
+        for row in mine:
+            outputs = {row.get('video'), row.get('full_video')} - {None}
+            if outputs & uploaded or any(o.replace('.mp4', '_used.mp4') in uploaded for o in outputs) or row.get('full_video_id'):
+                raise SystemExit('This story\'s video was already uploaded to YouTube, so it is not remade. Write a new story.')
+        if mine:
+            def replace(current, names={row.get('name') for row in mine}):
+                for row in current:
+                    if row.get('name') in names and row.get('status') == 'complete':
+                        row['review'] = 'rejected'
+                        row['review_note'] = 'Replaced by a remake'
+            update_json(plan_path, replace, [])
+    update_json(SHARED / 'story_usage.json', lambda rows: rows.pop(fingerprint, None), {})
+    if used.is_file() and not source.is_file():
+        used.rename(source)
+    print(f'Remaking the video for "{story.get("title", plain)}" with the current settings.', flush=True)
+    return plain
 
 
 def finished_files_exist(dest, item):
