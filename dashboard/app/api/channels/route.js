@@ -1,5 +1,6 @@
 import {createProfile, connectChannel, cancelConnection, produce, saveSettings, addStory, preschedule, generateStories,
   autopilot, saveApiKey, markRelatedDone, review, editTitle, makeVoiceSamples, exportTikTok, savePexelsKey, openFolder,
+  designVoice, keepDesign, characterPreviews,
   isLocalRequest} from '../../../lib/studio';
 
 const actions = {
@@ -20,6 +21,9 @@ const actions = {
   'tiktok': body => exportTikTok(body.channel),
   'pexels-key': body => savePexelsKey(body.key, body.confirmRemove === true),
   'open-folder': body => openFolder(body.channel, body.which),
+  'design-voice': body => designVoice(body.channel, body.description, body.count),
+  'keep-design': body => keepDesign(body.channel, body.file, body.name),
+  'character-previews': body => characterPreviews(body.channel, body.sample),
 };
 
 export async function POST(request) {

@@ -248,12 +248,46 @@ def video_filter(layout, background_size, captions_name, duration, progress_bar,
     return graph + '[v]'
 
 
-def audio_filter(music_volume, has_music):
-    voice = '[1:a]aresample=48000,aformat=channel_layouts=stereo'
+def _pitch(ratio):
+    """Lower (ratio < 1) or raise the pitch without changing the length, so captions stay in sync."""
+    return f'asetrate=48000*{ratio},aresample=48000,atempo={1 / ratio:.5f}'
+
+
+# A channel's signature sound, applied to the narration of every video.
+VOICE_CHARACTERS = {
+    'natural': 'As recorded',
+    'deep': 'Deep & close: a little lower, warmer, right next to you',
+    'uncanny': 'Uncanny: lower, with a faint second voice an octave below',
+    'tape': 'Old tape: narrow, faint hiss and wobble, like a found recording',
+    'room': 'Empty room: a small, cold room around the voice',
+}
+
+
+def voice_character(character, source='[1:a]', output='[voice]'):
+    """Filter graph from the narration input to a labelled, treated voice."""
+    base = f'{source}aresample=48000,aformat=channel_layouts=stereo'
+    if character == 'deep':
+        return (f'{base},{_pitch(0.94)},bass=g=3:f=110:w=0.7,'
+                f'acompressor=threshold=0.125:ratio=2.5:attack=10:release=250:makeup=1.4{output}')
+    if character == 'uncanny':
+        return (f'{base},{_pitch(0.95)},asplit=2[u1][u2];'
+                f'[u2]{_pitch(0.5)},lowpass=f=700,volume=0.16[undertone];'
+                f'[u1][undertone]amix=inputs=2:duration=first:normalize=0,aecho=0.9:0.5:18:0.12{output}')
+    if character == 'tape':
+        return (f'{base},highpass=f=200,lowpass=f=4000,vibrato=f=0.7:d=0.02,acompressor=threshold=0.2:ratio=3[tape];'
+                f'anoisesrc=color=pink:amplitude=0.006:sample_rate=48000,aformat=channel_layouts=stereo[hiss];'
+                f'[tape][hiss]amix=inputs=2:duration=first:normalize=0{output}')
+    if character == 'room':
+        return f'{base},aecho=0.8:0.55:32|61|97:0.22|0.14|0.08{output}'
+    return base + output
+
+
+def audio_filter(music_volume, has_music, character='natural'):
+    voice = voice_character(character)
     if not has_music:
-        return voice + ',loudnorm=I=-14:TP=-1.5:LRA=11[a]'
+        return voice + ';[voice]loudnorm=I=-14:TP=-1.5:LRA=11[a]'
     # Gentle ducking: music dips under speech without pumping back up in every pause.
-    return (f'{voice},asplit[v1][v2];'
+    return (f'{voice};[voice]asplit[v1][v2];'
             f'[2:a]aresample=48000,aformat=channel_layouts=stereo,volume={music_volume:.3f}[m];'
             f'[m][v1]sidechaincompress=threshold=0.05:ratio=4:attack=20:release=600[duck];'
             f'[v2][duck]amix=inputs=2:duration=first:normalize=0,loudnorm=I=-14:TP=-1.5:LRA=11[a]')
@@ -315,6 +349,7 @@ def main():
     parser.add_argument('--word-color', default='#FFD400')
     parser.add_argument('--phrase-color', default='#FFFFFF')
     parser.add_argument('--grade', choices=sorted(GRADE_FILTERS), default='none')
+    parser.add_argument('--voice-character', choices=sorted(VOICE_CHARACTERS), default='natural')
     parser.add_argument('--encoder', default='auto', help='auto, libx264, h264_nvenc, h264_videotoolbox, h264_qsv, h264_amf')
     args = parser.parse_args()
     narration = args.narration.resolve()
@@ -357,7 +392,7 @@ def main():
     graph = video_filter(args.format, None if prepared else video_size(background), captions.name, duration,
                          args.progress_bar, args.grade, image_pan(args.format, image_size) if prepared else None,
                          vignette_input)
-    graph += ';' + audio_filter(args.music_volume, bool(track))
+    graph += ';' + audio_filter(args.music_volume, bool(track), args.voice_character)
 
     def command(chosen):
         return [imageio_ffmpeg.get_ffmpeg_exe(), '-hide_banner', '-loglevel', 'error', '-y', *inputs,

@@ -19,6 +19,58 @@ function OpenFolder({which, label, action, busy}) {
   return <button type="button" className="folder" disabled={busy} onClick={() => action({action: 'open-folder', which})}>📂 {label}</button>;
 }
 
+const CHARACTER_LABEL = {natural: 'Natural', deep: 'Deep & close', uncanny: 'Uncanny', tape: 'Old tape', room: 'Empty room'};
+const CHARACTER_NOTE = {natural: 'As recorded', deep: 'A little lower and warmer, right next to you',
+  uncanny: 'Lower, with a faint second voice an octave below', tape: 'Narrow, faint hiss and wobble, like a found recording',
+  room: 'A small, cold room around the voice'};
+const DESIGN_EXAMPLES = [
+  'A very deep, slow male voice in his sixties, hoarse and slightly cracked, speaking quietly and close to the microphone, unnervingly calm, as if he already knows how the story ends.',
+  'A soft, breathy female voice, almost a whisper, gentle but a little too calm, with long pauses, like a caretaker reading to someone who cannot leave the room.',
+  'A low, gravelly male voice with a slight Southern drawl, tired and matter-of-fact, like a night watchman telling you the one story he never tells anyone.',
+];
+
+function VoiceCharacter({data, busy, action, sample}) {
+  const c = data.channel, preview = data.characterPreview;
+  const ready = preview && sample && preview.source === sample.file;
+  return <div className="character-block">
+    <div className="voice-subhead"><strong>Voice character</strong><small>A signature sound added to every video's narration.</small>
+      <button type="button" disabled={busy || !sample || data.voices?.running} onClick={() => action({action: 'character-previews', sample: sample.file})}>
+        {ready ? 'Remake previews' : 'Hear my narrator with each'}</button></div>
+    {!sample && <small>Make the voice samples first; the previews use your narrator's sample.</small>}
+    <ul className="sample-list">{(data.voiceCharacters || ['natural']).map(name => {
+      const chosen = (c.voice_character || 'natural') === name;
+      return <li key={name} className={chosen ? 'chosen' : ''}>
+        <div><strong>{CHARACTER_LABEL[name] || name}</strong><small>{CHARACTER_NOTE[name]}</small></div>
+        {ready ? <audio controls preload="none" src={sampleUrl(`character_${name}.wav`)}/> : <span/>}
+        <button type="button" disabled={busy || chosen} onClick={() => action({action: 'settings', settings: {...c, voice_character: name}})}>
+          {chosen ? '✓ Selected' : 'Use'}</button></li>;
+    })}</ul>
+  </div>;
+}
+
+function VoiceDesigner({data, busy, action}) {
+  const [description, setDescription] = useState(''), [names, setNames] = useState({});
+  const running = data.designs?.running;
+  return <details className="designer-block" open={running || undefined}>
+    <summary><strong>Design a new voice</strong> <small>Describe a narrator nobody else has; it belongs to nobody, so it is yours to use.</small></summary>
+    {!data.designerInstalled ? <p className="reason">Not installed yet. Run <code>setup_voice_designer.cmd</code> in the StoryShortsStudio folder once (about 7 GB of downloads; needs your NVIDIA card).</p> : <>
+      <textarea rows={3} maxLength={500} value={description} onChange={e => setDescription(e.target.value)}
+        placeholder="Who is speaking? Age, depth, texture (hoarse, breathy, smooth), pace, mood, how close to the microphone…"/>
+      <div className="examples">{DESIGN_EXAMPLES.map((text, i) => <button type="button" key={i} onClick={() => setDescription(text)}>Example {i + 1}</button>)}</div>
+      <button type="button" className="primary" disabled={busy || running || description.trim().length < 10}
+        onClick={() => action({action: 'design-voice', description, count: 3})}>{running ? 'Designing… (about a minute per take)' : 'Make 3 takes'}</button>
+    </>}
+    {(data.voiceDesigns ?? []).length > 0 && <ul className="sample-list">{data.voiceDesigns.map(d => <li key={d.file}>
+      <div><strong>Take {d.file.slice(-5, -4)}</strong><small title={d.description}>{d.description.slice(0, 120)}{d.description.length > 120 ? '…' : ''}</small></div>
+      <audio controls preload="none" src={sampleUrl(d.file)}/>
+      <span className="keep"><input aria-label="Name for this voice" placeholder="Name, e.g. Old Caretaker" maxLength={40}
+        value={names[d.file] || ''} onChange={e => setNames({...names, [d.file]: e.target.value})}/>
+        <button type="button" disabled={busy || !(names[d.file] || '').trim()} onClick={() => action({action: 'keep-design', file: d.file, name: names[d.file]})}>Keep as narrator</button></span>
+    </li>)}</ul>}
+    <Log title="Voice designer" job={data.designs}/>
+  </details>;
+}
+
 // Lives on the main page, so voices can be compared and chosen without opening Settings.
 function VoiceSamples({data, busy, action}) {
   const samples = data?.voiceSamples ?? [];
@@ -46,6 +98,8 @@ function VoiceSamples({data, busy, action}) {
       <audio controls preload="none" src={sampleUrl(s.file)}/>
       <button type="button" disabled={busy || using(s)} onClick={() => choose(s)}>{using(s) ? '✓ Selected' : 'Use this voice'}</button></li>)}</ul>}
     {!samples.length && !data.voices?.running && <small>No samples yet: click “Make voice samples” (3–6 minutes the first time).</small>}
+    <VoiceCharacter data={data} busy={busy} action={action} sample={samples.find(using)}/>
+    <VoiceDesigner data={data} busy={busy} action={action}/>
     <small>Your own clips: 10–30 seconds of clean speech you have the rights to (WAV or MP3) in the Narrator clips folder, then make the samples again.</small>
     <Log title="Voice samples" job={data.voices}/>
   </section>;
@@ -92,6 +146,8 @@ export default function ChannelControls({data, channel, onChannel, onRefresh}) {
         setMessage(result.fits ? `Story added (${result.words} words).`
           : `Story added (${result.words} words), but this channel only uses stories of ${result.low}–${result.high} words.`);
       } else if (body.action === 'api-key') { setApiKey(''); setMessage(result.removed ? 'API key removed.' : 'API key saved on this computer.'); }
+      else if (body.action === 'keep-design') setMessage(result.sampling ? 'Saved as a narrator. Its Chatterbox sample is being made (about a minute); then choose it under Narrator.'
+        : 'Saved as a narrator. Install Chatterbox (setup_voice) to hear it narrate.');
       else if (body.action === 'open-folder') setMessage(result.opened ? '' : 'Could not open the folder.');
       else if (body.action === 'pexels-key') { setPexelsKey(''); setMessage(result.removed ? 'Pexels key removed.' : 'Pexels key saved on this computer.'); }
       await onRefresh();

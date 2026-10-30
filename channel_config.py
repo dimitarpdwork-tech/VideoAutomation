@@ -56,6 +56,8 @@ CHANNEL_DEFAULTS = {
     # its built-in voice). Chatterbox needs setup_voice and ideally an NVIDIA card.
     'voice_engine': 'kokoro', 'voice_clip': '', 'voice_clip_male': None, 'voice_clip_female': None,
     'chatterbox_model': 'standard', 'expressiveness': 0.5,
+    # Signature sound applied to the narration: natural, deep, uncanny, tape or room.
+    'voice_character': 'natural',
     # Picture behind the narration: 'clips' (background videos) or 'image' (one
     # free-licence atmospheric photo per story, slowly panned).
     'background_mode': 'clips', 'image_keywords': [],
@@ -79,7 +81,7 @@ PRESETS = {
         'period_pause': 0.35, 'caption_style': 'phrases', 'caption_font': 'Georgia', 'phrase_color': '#E8E2D0',
         'caption_color': '#C8102E', 'color_grade': 'cold', 'music_volume': 0.10,
         'hashtags': ['#horrorstories', '#scarystories'], 'tags': ['horror story', 'scary story', 'creepy'],
-        'voice_engine': 'chatterbox', 'expressiveness': 0.6, 'background_mode': 'image',
+        'voice_engine': 'chatterbox', 'expressiveness': 0.6, 'background_mode': 'image', 'voice_character': 'deep',
         'image_keywords': ['abandoned house night', 'dark forest fog', 'empty hallway dark', 'old staircase shadows',
                            'foggy road night', 'abandoned hospital corridor', 'dark window night house'],
         'tiktok_hashtags': ['#horrortok', '#scarystories', '#creepy'],
@@ -112,6 +114,7 @@ PRESETS = {
     },
 }
 GRADES = ('none', 'cold', 'warm', 'faded', 'noir')
+VOICE_CHARACTERS = ('natural', 'deep', 'uncanny', 'tape', 'room')
 
 
 def venv_python(env='.venv'):

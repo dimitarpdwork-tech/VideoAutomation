@@ -94,7 +94,8 @@ def render_part(part_dir, item, config, dest, filename, title, end_text):
                '--title-card', title, '--title-seconds', str(config.get('title_card_seconds', 3) or 3),
                '--progress-bar', '--font', config.get('caption_font') or 'Arial Black',
                '--word-color', config.get('caption_color') or '#FFD400',
-               '--phrase-color', config.get('phrase_color') or '#FFFFFF', '--grade', config.get('color_grade') or 'none']
+               '--phrase-color', config.get('phrase_color') or '#FFFFFF', '--grade', config.get('color_grade') or 'none',
+               '--voice-character', config.get('voice_character') or 'natural']
     if end_text:
         command += ['--end-text', end_text]
     if (ROOT / 'music').is_dir() and config.get('music_volume', 0) > 0:

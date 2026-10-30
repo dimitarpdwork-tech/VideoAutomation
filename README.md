@@ -184,6 +184,20 @@ Choose per channel in **Settings → Voice and look**.
 - **Kokoro** is faster and needs no graphics card, but reads every line the
   same way.
 
+- **Design a new voice.** Under **Narrator → Design a new voice**, describe a
+  narrator in plain words ("a very deep, slow male voice in his sixties, hoarse,
+  close to the microphone, unnervingly calm") and get three takes made by
+  [Qwen3-TTS VoiceDesign](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign)
+  (Apache 2.0). **Keep as narrator** saves a take as a clip; Chatterbox then
+  narrates with that voice. An invented voice belongs to nobody, so it is
+  yours to use. Install it once with `setup_voice_designer.cmd` /
+  `./setup_voice_designer.sh` (about 7 GB; needs an NVIDIA card with 8 GB).
+- **Voice character** gives a channel a signature sound on every video:
+  Natural, Deep & close, Uncanny (a faint second voice an octave below), Old
+  tape, or Empty room. **Hear my narrator with each** renders your narrator
+  through all five in a few seconds. The narration length never changes, so
+  captions stay in sync.
+
 Chatterbox adds an inaudible watermark (Resemble AI's "Perth") to its audio,
 as its licence intends; you will not hear it.
 

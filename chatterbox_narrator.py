@@ -475,12 +475,13 @@ def main():
     parser.add_argument('--body-only', action='store_true')
     parser.add_argument('--serve', action='store_true', help='Read narration requests from stdin (used by production)')
     parser.add_argument('--samples', action='store_true', help='Make voice samples for every clip in voices/')
+    parser.add_argument('--only', nargs='*', help='With --samples: only these clip names (without extension)')
     args = parser.parse_args()
     narrator = Narrator(args.model, args.device)
     if args.serve:
         return serve(narrator)
     if args.samples:
-        return make_samples(narrator)
+        return make_samples(narrator, args.only)
     if not args.story:
         parser.error('give a story file, --samples or --serve')
     output = args.output or ROOT / 'narrations' / args.story.stem / 'chatterbox'

@@ -298,7 +298,8 @@ def render(narration, item, config, dest, filename, layout):
     command += ['--font', config.get('caption_font') or 'Arial Black',
                 '--word-color', config.get('caption_color') or '#FFD400',
                 '--phrase-color', config.get('phrase_color') or '#FFFFFF',
-                '--grade', config.get('color_grade') or 'none']
+                '--grade', config.get('color_grade') or 'none',
+                '--voice-character', config.get('voice_character') or 'natural']
     if (ROOT / 'music').is_dir() and config.get('music_volume', 0) > 0:
         command += ['--music', str(ROOT / 'music'), '--music-volume', str(config['music_volume'])]
     subprocess.run(command, check=True)

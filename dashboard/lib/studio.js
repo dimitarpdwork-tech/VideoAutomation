@@ -13,7 +13,9 @@ const PEXELS_FILE = () => path.join(root, 'credentials', 'pexels_api_key.txt');
 const VOICES_DIR = path.join(root, 'voices');
 const SAMPLES_DIR = path.join(SHARED, 'voice_samples');
 const CLIP_FILE = /^[A-Za-z0-9_][A-Za-z0-9_ .-]{0,80}\.(wav|mp3|flac|m4a|ogg)$/i;
-const SAMPLE_FILE = /^(kokoro|chatterbox)_[A-Za-z0-9_ .-]{1,80}\.wav$/;
+const SAMPLE_FILE = /^((kokoro|chatterbox)_[A-Za-z0-9_ .-]{1,80}|character_[a-z]+)\.wav$/;
+const DESIGNS_DIR = path.join(SHARED, 'voice_designs');
+const DESIGN_FILE = /^design_\d{8}_\d{6}_\d\.wav$/;
 const CHANNEL_ID = /^[a-z0-9][a-z0-9_-]{0,39}$/;
 const BATCH_ID = /^[a-zA-Z0-9_-]+$/;
 const ITEM_FILE = /^(tiktok\/)?[A-Za-z0-9_.-]+\.(mp4|jpg|txt)$/;
@@ -149,6 +151,7 @@ const production = globalThis.__productionJob ??= blank();
 const scheduling = globalThis.__schedulingJob ??= blank();
 const generation = globalThis.__generationJob ??= blank();
 const voiceJob = globalThis.__voiceJob ??= blank();
+const designJob = globalThis.__designJob ??= blank();
 const job = id => jobs[id] ??= {upload: blank(), insights: {...blank(), lastAttempt: 0}, connection: blank()};
 
 // The one line worth showing when a job fails: the last message, not the traceback.
@@ -290,6 +293,9 @@ export async function snapshot(id = 'main') {
   const voiceClips = (await files(VOICES_DIR)).filter(f => f.isFile() && CLIP_FILE.test(f.name)).map(f => f.name).sort();
   const voiceSamples = (await readJson(path.join(SAMPLES_DIR, 'index.json'), [])).filter(s => SAMPLE_FILE.test(s.file || ''));
   const voiceInstalled = await exists(python('.venv-voice'));
+  const designerInstalled = await exists(python('.venv-design'));
+  const voiceDesigns = (await readJson(path.join(DESIGNS_DIR, 'index.json'), [])).filter(d => DESIGN_FILE.test(d.file || '')).slice(-9).reverse();
+  const characterPreview = await readJson(path.join(SAMPLES_DIR, 'characters.json'), null);
   const musicFiles = (await files(path.join(root, 'music'))).filter(f => f.isFile() && /\.(mp3|m4a|aac|wav|ogg|flac)$/i.test(f.name)).length;
   const topPerformers = queue.filter(v => v.insights?.viewCount).sort((a, b) => b.insights.viewCount - a.insights.viewCount).slice(0, 5)
     .map(v => ({title: v.title, kind: v.kind, views: v.insights.viewCount, videoId: v.videoId, watched: v.insights.averageViewPercentage ?? null}));
@@ -298,6 +304,7 @@ export async function snapshot(id = 'main') {
     channel: {...selected, connected, token}, channels: profiles, presets: Object.keys(presets), grades, formats,
     backgroundFiles, eligibleStories: eligible, generatedStories, reviewStories: setAside, conceptSources,
     hasPexelsKey, voiceClips, voiceSamples, voiceInstalled, voices: view(voiceJob), tiktok: tiktok.slice(-30),
+    designerInstalled, voiceDesigns, designs: view(designJob), characterPreview, voiceCharacters: (await schema()).voice_characters ?? ['natural'],
     imageMode: selected.background_mode === 'image',
     related, hasApiKey, musicFiles, topPerformers, reviewItems, failed: failed.slice(-20),
     stats: {stories, backgrounds: backgroundFiles.length, total: queue.length,
@@ -326,6 +333,7 @@ export async function media(id, batch, file, range) {
 
 // A voice sample from output/shared/voice_samples (Settings > Voice).
 export async function voiceSample(file, range) {
+  if (DESIGN_FILE.test(file || '')) return streamFile(path.join(DESIGNS_DIR, file), 'audio/wav', range);
   if (!SAMPLE_FILE.test(file || '')) throw Error('Invalid file');
   return streamFile(path.join(SAMPLES_DIR, file), 'audio/wav', range);
 }
@@ -377,7 +385,7 @@ export async function syncInsights(connect = false, id = 'main') {
   return {started: true};
 }
 
-const anyJobRunning = id => production.running || generation.running || scheduling.running || voiceJob.running || job(id).upload.running;
+const anyJobRunning = id => production.running || generation.running || scheduling.running || voiceJob.running || designJob.running || job(id).upload.running;
 
 export async function uploadNext(id = 'main') {
   const data = await snapshot(id);
@@ -468,6 +476,8 @@ export async function saveSettings(id, values) {
   if (!['kokoro', 'chatterbox'].includes(v.voice_engine)) fail('Choose a narration engine.');
   for (const key of ['voice_clip', 'voice_clip_male', 'voice_clip_female']) if (v[key] && !CLIP_FILE.test(v[key])) fail('Narrator clip: choose a file from the voices folder.');
   if (!['standard', 'turbo'].includes(v.chatterbox_model)) fail('Choose a Chatterbox model.');
+  const characters = (await schema()).voice_characters ?? ['natural'];
+  if (!characters.includes(v.voice_character ?? 'natural')) fail('Choose a voice character.');
   if (!Number.isFinite(v.expressiveness) || v.expressiveness < 0.25 || v.expressiveness > 1.5) fail('Expressiveness must be between 0.25 and 1.5.');
   if (!['clips', 'image'].includes(v.background_mode)) fail('Choose a background type.');
   if (!Array.isArray(v.image_keywords) || v.image_keywords.length > 20 || v.image_keywords.some(k => typeof k !== 'string' || k.length > 60 || /[<>{}]/.test(k))) fail('Image keywords: up to 20 phrases, each under 60 characters.');
@@ -482,6 +492,7 @@ export async function saveSettings(id, values) {
     voice_clip: v.voice_clip || '', voice_clip_male: v.voice_clip_male || null, voice_clip_female: v.voice_clip_female || null,
     image_keywords: v.image_keywords.map(k => k.trim()).filter(Boolean),
     tiktok_hashtags: v.tiktok_hashtags.map(t => (t.startsWith('#') ? t : '#' + t)),
+    voice_character: v.voice_character ?? 'natural',
   };
   for (const key of ['credit_source', 'clean_language', 'title_card', 'progress_bar', 'require_review']) clean[key] = v[key] !== false;
   const keys = ['voice', 'voice_male', 'voice_female', 'speed', 'period_pause', 'caption_style', 'min_words', 'max_words', 'backgrounds',
@@ -490,7 +501,7 @@ export async function saveSettings(id, values) {
     'full_description_template', 'fiction_note', 'clean_language', 'title_card', 'title_card_seconds', 'progress_bar', 'music_volume',
     'generator_model', 'story_category', 'require_review', 'max_uploads_per_day', 'caption_font', 'caption_color', 'phrase_color', 'color_grade',
     'voice_engine', 'voice_clip', 'voice_clip_male', 'voice_clip_female', 'chatterbox_model', 'expressiveness', 'background_mode',
-    'image_keywords', 'collected_stories', 'long_target_words', 'tiktok_part_seconds', 'tiktok_hashtags'];
+    'image_keywords', 'collected_stories', 'long_target_words', 'tiktok_part_seconds', 'tiktok_hashtags', 'voice_character'];
   await config(id);
   // Merge into the file as it is now: a sign-in finishing meanwhile keeps its channel binding.
   await withJsonLock(path.join(root, 'channels', id, 'config.json'), current => {
@@ -628,6 +639,47 @@ export async function savePexelsKey(key, confirmRemove) {
   await fs.writeFile(PEXELS_FILE(), key, {mode: 0o600});
   await fs.chmod(PEXELS_FILE(), 0o600).catch(() => {});
   return {saved: true};
+}
+
+// Voice designer: invent a narrator from a description (Qwen3-TTS VoiceDesign, .venv-design).
+export async function designVoice(id, description, count) {
+  await config(id);
+  description = typeof description === 'string' ? description.replace(/\s+/g, ' ').trim() : '';
+  if (description.length < 10 || description.length > 500) throw Error('Describe the voice in 10–500 characters.');
+  if (!Number.isInteger(count) || count < 1 || count > 5) throw Error('Choose 1 to 5 takes.');
+  if (!(await exists(python('.venv-design')))) throw Error('The voice designer is not installed yet: run setup_voice_designer.');
+  if (anyJobRunning(id)) throw Error('Another job is running. Wait for it to finish.');
+  start('voice_designer.py', ['--description', description, '--count', String(count)], designJob, '.venv-design');
+  return {started: true};
+}
+
+// Keep a designed take as a narrator clip, then make its Chatterbox sample.
+export async function keepDesign(id, file, name) {
+  await config(id);
+  if (!DESIGN_FILE.test(file || '')) throw Error('Choose a voice take.');
+  const slug = (typeof name === 'string' ? name : '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
+  if (!slug) throw Error('Give the voice a name, e.g. "Old Caretaker".');
+  const designs = await readJson(path.join(DESIGNS_DIR, 'index.json'), []);
+  const take = designs.find(d => d.file === file);
+  if (!take) throw Error('That take was not found.');
+  if (anyJobRunning(id)) throw Error('Another job is running. Wait for it to finish.');
+  await fs.mkdir(VOICES_DIR, {recursive: true});
+  const stem = 'designed_' + slug;
+  if (await exists(path.join(VOICES_DIR, stem + '.wav'))) throw Error('A narrator with that name already exists; choose another name.');
+  await fs.copyFile(path.join(DESIGNS_DIR, file), path.join(VOICES_DIR, stem + '.wav'));
+  await writeJson(path.join(VOICES_DIR, stem + '.json'), {description: take.description, seed: take.seed, from: file});
+  const sampling = await exists(python('.venv-voice'));
+  if (sampling) start('voice_samples.py', ['--only', stem], voiceJob, true);
+  return {clip: stem + '.wav', sampling};
+}
+
+// Hear the current narrator through every voice character (takes seconds).
+export async function characterPreviews(id, sample) {
+  await config(id);
+  if (!SAMPLE_FILE.test(sample || '') || sample.startsWith('character_')) throw Error('Choose a narrator sample first.');
+  if (voiceJob.running) throw Error('Voice samples are being made. Wait for them to finish.');
+  start('voice_character_samples.py', [sample], voiceJob);
+  return {started: true};
 }
 
 // Open a project folder in Explorer / Finder. Only these fixed folders can be opened.

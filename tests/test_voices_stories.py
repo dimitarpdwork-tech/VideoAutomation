@@ -412,3 +412,74 @@ class VoiceSampleTests(unittest.TestCase):
             self.assertEqual(len(list((folder / 'voices').glob('starter_*.wav'))), 5)
             index = json.loads((folder / 'samples/index.json').read_text())
             self.assertEqual(len(index), 5)
+
+
+class VoiceCharacterTests(unittest.TestCase):
+    def test_every_character_keeps_the_narration_length(self):
+        import math, struct
+        import voice_character_samples
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            with wave.open(str(folder / 'voice.wav'), 'wb') as audio:
+                audio.setnchannels(1); audio.setsampwidth(2); audio.setframerate(24000)
+                audio.writeframes(b''.join(struct.pack('<h', int(6000 * math.sin(i / 9))) for i in range(24000 * 20)))
+            for character in make_video.VOICE_CHARACTERS:
+                target = folder / f'{character}.wav'
+                voice_character_samples.render(folder / 'voice.wav', character, target)
+                with wave.open(str(target)) as audio:
+                    seconds = audio.getnframes() / audio.getframerate()
+                self.assertAlmostEqual(seconds, 20.0, delta=0.35, msg=character)   # captions stay in sync
+
+    def test_music_mix_uses_the_treated_voice(self):
+        graph = make_video.audio_filter(0.1, True, 'deep')
+        self.assertIn('asetrate=48000*0.94', graph)
+        self.assertIn('[voice]asplit[v1][v2]', graph)
+        self.assertTrue(make_video.audio_filter(0, False).endswith('loudnorm=I=-14:TP=-1.5:LRA=11[a]'))
+
+
+def _has(module):
+    import importlib.util
+    return importlib.util.find_spec(module) is not None
+
+
+class VoiceDesignerTests(unittest.TestCase):
+    @unittest.skipUnless(_has('numpy') and _has('soundfile') and _has('torch'), 'runs in the voice environments')
+    def test_takes_are_saved_and_listed(self):
+        import numpy
+        import voice_designer
+        calls = []
+
+        class FakeModel:
+            def generate_voice_design(self, text, instruct, language):
+                calls.append((instruct, language))
+                return [numpy.zeros(24000 * (3 if len(calls) == 2 else 12), dtype=numpy.float32) + 0.1], 24000
+        with tempfile.TemporaryDirectory() as folder, patch.object(voice_designer, 'DESIGNS', Path(folder)):
+            made = voice_designer.design('A deep, slow voice', count=3, seed=5, model=FakeModel(), log=lambda m: None)
+            self.assertEqual(len(made), 2)                       # the 3-second take was too short
+            self.assertEqual(calls[0], ('A deep, slow voice', 'English'))
+            index = json.loads((Path(folder) / 'index.json').read_text())
+            self.assertEqual([row['file'] for row in index], [row['file'] for row in made])
+            self.assertTrue(all((Path(folder) / row['file']).is_file() for row in made))
+
+    def test_kept_voice_gets_its_description_in_samples(self):
+        import voice_samples
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            (folder / 'voices').mkdir()
+            (folder / 'samples').mkdir()
+            (folder / 'voices/designed_old_caretaker.wav').write_bytes(b'RIFF')
+            channels.write_json(folder / 'voices/designed_old_caretaker.json', {'description': 'An old caretaker'})
+            channels.write_json(folder / 'samples/index.json', [{'file': 'kokoro_am_onyx.wav', 'engine': 'kokoro', 'label': 'K'}])
+            commands = []
+
+            def run(command, cwd=None):
+                commands.append(command)
+                (folder / 'samples/chatterbox_designed_old_caretaker.wav').write_bytes(b'RIFF')
+                return SimpleNamespace(returncode=0)
+            with patch.object(voice_samples.cb, 'VOICES', folder / 'voices'), patch.object(voice_samples.cb, 'SAMPLES', folder / 'samples'), \
+                    patch.object(voice_samples.voice_worker, 'installed', return_value=True), patch.object(voice_samples.subprocess, 'run', run):
+                voice_samples.main('designed_old_caretaker')
+            self.assertEqual(commands[0][-2:], ['--only', 'designed_old_caretaker'])
+            index = json.loads((folder / 'samples/index.json').read_text())
+            self.assertEqual([row['engine'] for row in index], ['chatterbox', 'kokoro'])   # Kokoro rows kept
+            self.assertEqual(index[0]['description'], 'Designed: An old caretaker')
