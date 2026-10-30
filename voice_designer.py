@@ -21,6 +21,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 os.environ.setdefault('HF_HOME', str(ROOT / '.model-cache' / 'huggingface'))
 os.environ.setdefault('TQDM_DISABLE', '1')
+os.environ.setdefault('TRANSFORMERS_VERBOSITY', 'error')
+os.environ.setdefault('HF_HUB_DISABLE_SYMLINKS_WARNING', '1')
 DESIGNS = ROOT / 'output' / 'shared' / 'voice_designs'
 MODEL = 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign'
 # Read in the new voice. Chatterbox copies the voice and the manner of the reading,
@@ -29,6 +31,31 @@ REFERENCE_TEXT = ("I have lived in this house for eleven years. In all that time
                   "stairs at night. Not until last winter. And now I hear them every night, just after three, "
                   "always stopping at my door.")
 MAX_DESCRIPTION = 500
+
+
+class quiet:
+    """Silence the harmless start-up noise (flash-attn, SoX, generation notices), even from child processes."""
+    def __enter__(self):
+        import logging
+        import warnings
+        warnings.filterwarnings('ignore')
+        for name in ('sox', 'transformers', 'huggingface_hub'):
+            logging.getLogger(name).setLevel(logging.ERROR)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        self.saved = os.dup(1), os.dup(2)
+        self.null = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(self.null, 1)
+        os.dup2(self.null, 2)
+
+    def __exit__(self, *exc):
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.dup2(self.saved[0], 1)
+        os.dup2(self.saved[1], 2)
+        for descriptor in (*self.saved, self.null):
+            os.close(descriptor)
+        return False
 
 
 def write_index(rows):
@@ -52,7 +79,8 @@ def design(description, count=3, seed=None, model=None, log=print):
     if model is None:
         if not torch.cuda.is_available():
             raise SystemExit('The voice designer needs an NVIDIA graphics card, and none was found.')
-        from qwen_tts import Qwen3TTSModel
+        with quiet():
+            from qwen_tts import Qwen3TTSModel
         log(f'Loading the voice designer on {torch.cuda.get_device_name(0)} (the first run downloads about 4.5 GB)...')
         model = Qwen3TTSModel.from_pretrained(MODEL, device_map='cuda:0', dtype=torch.bfloat16)
     stamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
@@ -63,7 +91,8 @@ def design(description, count=3, seed=None, model=None, log=print):
         take_seed = base_seed + take * 101
         torch.manual_seed(take_seed)
         log(f'Take {take} of {count}...')
-        wavs, rate = model.generate_voice_design(text=REFERENCE_TEXT, instruct=description, language='English')
+        with quiet():
+            wavs, rate = model.generate_voice_design(text=REFERENCE_TEXT, instruct=description, language='English')
         audio = np.asarray(wavs[0], dtype=np.float32).reshape(-1)
         seconds = len(audio) / rate
         if seconds < 6:
